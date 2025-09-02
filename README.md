@@ -47,18 +47,22 @@ Options:
 - `--max-file-mb`: size cap per file for sending (default: 8.0)
 - `--skip-oversize/--no-skip-oversize`: skip files over cap (default: skip)
 
+#### Environment variables and .env
+
+- You can set `DISCORD_TOKEN` in your environment or place it in a `.env` file in the project root. The CLI now auto-loads `.env`.
+- If no token is found, you'll be prompted once at runtime, with an option to save it to `.env` for future runs.
+
 Examples:
 
 ```bash
-# Send with dedupe (default) using bot token from env var
-set DISCORD_TOKEN=xxxxxxxxxxxxxxxx
+# Send with dedupe (default) using bot token from .env or env var
 python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456"
 
 # Force send everything
 python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456" --token xxxxx --ignore-dedupe
 
-# Dry run
-python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456" --token xxxxx --dry-run
+# Dry run (reads token from .env if saved)
+python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456" --dry-run
 ```
 
 ### How pairing and segmentation works

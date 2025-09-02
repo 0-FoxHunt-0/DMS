@@ -1,7 +1,6 @@
-import os
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import typer
 from rich import print as rprint
@@ -9,7 +8,10 @@ from rich.table import Table
 
 from .discord_client import DiscordClient
 from .scanner import ScanResult, scan_media
+from .config import load_env, set_env_var
 
+
+load_env()
 
 app = typer.Typer(add_completion=False, help="Send media to Discord, pairing MP4+GIF and handling segments.")
 
@@ -30,7 +32,11 @@ def _print_plan(result: ScanResult) -> None:
 def send(
     input_dir: Path = typer.Argument(..., exists=True, file_okay=False, dir_okay=True, readable=True),
     channel_url: str = typer.Argument(..., help="Discord channel URL like https://discord.com/channels/<guild>/<channel>"),
-    token: str = typer.Option(os.getenv("DISCORD_TOKEN", ""), help="Discord token; defaults to DISCORD_TOKEN env var"),
+    token: Optional[str] = typer.Option(
+        None,
+        help="Discord token; can be set via DISCORD_TOKEN or stored in .env",
+        envvar="DISCORD_TOKEN",
+    ),
     token_type: str = typer.Option("bot", help="Token type: 'bot' or 'user'"),
     ignore_dedupe: bool = typer.Option(False, help="Ignore channel history and send all files"),
     dry_run: bool = typer.Option(False, help="Print actions without uploading"),
@@ -42,8 +48,14 @@ def send(
     skip_oversize: bool = typer.Option(True, help="Skip files exceeding max_file_mb instead of attempting upload"),
 ) -> None:
     if not token:
-        rprint("[red]No token provided. Use --token or set DISCORD_TOKEN env var.[/red]")
-        raise typer.Exit(code=2)
+        rprint("[yellow]No token found. You'll be prompted and can save it for reuse.[/yellow]")
+        token = typer.prompt("Enter Discord token", hide_input=True)
+        if not token:
+            rprint("[red]No token provided.[/red]")
+            raise typer.Exit(code=2)
+        if typer.confirm("Save token to .env for future runs?", default=True):
+            set_env_var("DISCORD_TOKEN", token)
+            rprint("[green]Token saved to .env[/green]")
 
     client = DiscordClient(token=token, token_type=token_type)
     channel_id = client.parse_channel_id_from_url(channel_url)
