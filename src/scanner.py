@@ -90,7 +90,12 @@ def scan_media(root_dir: Path) -> ScanResult:
             buckets[key] = {}
         buckets[key][ext] = p
 
-    for (dir_key, root_name, seg_num), files in sorted(buckets.items()):
+    # Sort keys safely: place non-segmented (None) before segmented, then by segment number
+    def _sort_key(item: Tuple[Tuple[str, str, Optional[int]], Dict[str, Path]]):
+        (dir_key, root_name, seg_num), _files = item
+        return (dir_key, root_name, seg_num is not None, seg_num or 0)
+
+    for (dir_key, root_name, seg_num), files in sorted(buckets.items(), key=_sort_key):
         root_key = f"{dir_key}/{root_name}"
         mp4 = files.get(".mp4")
         gif = files.get(".gif")

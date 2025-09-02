@@ -54,7 +54,7 @@ Options:
 
 Examples:
 
-```bash
+````bash
 # Send with dedupe (default) using bot token from .env or env var
 python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456"
 
@@ -63,6 +63,27 @@ python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456" -
 
 # Dry run (reads token from .env if saved)
 python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456" --dry-run
+
+#### Relay media from one channel to another
+
+You can relay previously uploaded media from a source channel to a destination channel. The tool downloads media to a temporary directory and re-uploads it in chronological order.
+
+```bash
+# Relay from source to destination
+python main.py send \
+  . \
+  "https://discord.com/channels/<guild_id>/<dest_channel_id>" \
+  --relay-from "https://discord.com/channels/<guild_id>/<source_channel_id>" \
+  --history-limit 1000 \
+  --relay-download-dir .adms_cache
+````
+
+Notes:
+
+- The first positional argument `input_dir` is unused in relay mode; pass `.`
+- Relay respects `--max-file-mb` and `--skip-oversize` for downloads/uploads
+- `--history-limit` controls how many messages to scan in the source channel
+
 ```
 
 ### How pairing and segmentation works
@@ -87,3 +108,4 @@ python main.py send "D:\\Media\\Output" "https://discord.com/channels/123/456" -
 ### Disclaimer
 
 - Using a User token violates Discord's ToS. Prefer a Bot token placed in your server with send-message permissions.
+```
