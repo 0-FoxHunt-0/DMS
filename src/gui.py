@@ -649,6 +649,31 @@ def launch_gui() -> None:
                         job_params["post_tag"] = tag_override
                     def make_logger(itm: dict):
                         return lambda msg: run_pane.log_to(itm, msg)
+                    def make_on_thread_created(idx_local: int, item_local: dict, job_name: str):
+                        # Update the corresponding row URL StringVar and panel title safely from worker
+                        def _cb(new_url: str):
+                            try:
+                                # Update UI on main thread
+                                def _apply():
+                                    try:
+                                        # Update the jobs list row URL
+                                        if 0 <= idx_local - 1 < len(jobs_list.rows):
+                                            jobs_list.rows[idx_local - 1].url_var.set(new_url)
+                                        # Update the panel title to reflect the new URL
+                                        frame = item_local.get("frame")
+                                        if frame is not None:
+                                            try:
+                                                frame.configure(text=f"Job {idx_local}: {job_name} -> {new_url}")
+                                            except Exception:
+                                                pass
+                                        run_pane.log_to(item_local, f"Thread created -> {new_url}")
+                                    except Exception:
+                                        pass
+                                run_pane.after(0, _apply)
+                            except Exception:
+                                pass
+                        return _cb
+
                     futures.append(ex.submit(
                         send_media_job,
                         input_dir=p,
@@ -656,6 +681,7 @@ def launch_gui() -> None:
                         **job_params,
                         cancel_event=cancel_event,
                         on_log=make_logger(item),
+                        on_thread_created=make_on_thread_created(idx, item, p.name),
                     ))
                 for i, f in enumerate(as_completed(futures)):
                     try:

@@ -29,6 +29,7 @@ def send_media_job(
     skip_oversize: bool = True,
     cancel_event: Optional[object] = None,
     on_log: Optional[callable] = None,
+    on_thread_created: Optional[callable] = None,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -69,6 +70,15 @@ def send_media_job(
         if not new_thread_id:
             raise RuntimeError("Failed to create post thread")
         target_channel_id = new_thread_id
+        # Inform caller about the created thread so UI/clients can update URLs
+        try:
+            if on_thread_created is not None:
+                # Prefer the compact /channels/<guild>/<channel>/<thread> form
+                new_thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
+                on_thread_created(new_thread_url)
+        except Exception:
+            # Never let callback issues break the flow
+            pass
     elif thread_id is not None:
         target_channel_id = thread_id
 
