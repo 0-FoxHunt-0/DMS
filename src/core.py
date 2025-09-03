@@ -8,6 +8,7 @@ import threading
 from queue import Queue, Empty
 
 from .discord_client import DiscordClient
+from .discord_client import DiscordAuthError
 from .scanner import scan_media
 
 
@@ -57,7 +58,11 @@ def send_media_job(
 
     # If destination is forum/media channel and no thread id is provided, create a thread
     _log(f"Scanning '{input_dir}' and preparing destination...")
-    ch = client.get_channel(channel_id, request_timeout=request_timeout)
+    try:
+        ch = client.get_channel(channel_id, request_timeout=request_timeout)
+    except DiscordAuthError as e:
+        _log(f"Authentication error: {e}")
+        return "Aborted: authentication failed (401/403)"
     ch_type = ch.get("type") if ch else None
     is_forum_like = ch_type in (15, 16) if ch is not None else False
     target_channel_id = channel_id
@@ -93,17 +98,21 @@ def send_media_job(
         if source_id is None:
             raise ValueError("Invalid relay_from URL")
         _log(f"Relaying media from {relay_from} -> target thread/channel...")
-        sent, skipped = client.relay_media(
-            source_channel_id=source_id,
-            dest_channel_id=target_channel_id,
-            download_dir=relay_download_dir,
-            max_messages=history_limit,
-            request_timeout=request_timeout,
-            upload_timeout=upload_timeout,
-            delay_seconds=delay_seconds,
-            max_file_mb=max_file_mb,
-            skip_oversize=skip_oversize,
-        )
+        try:
+            sent, skipped = client.relay_media(
+                source_channel_id=source_id,
+                dest_channel_id=target_channel_id,
+                download_dir=relay_download_dir,
+                max_messages=history_limit,
+                request_timeout=request_timeout,
+                upload_timeout=upload_timeout,
+                delay_seconds=delay_seconds,
+                max_file_mb=max_file_mb,
+                skip_oversize=skip_oversize,
+            )
+        except DiscordAuthError as e:
+            _log(f"Authentication error during relay: {e}")
+            return "Aborted: authentication failed (401/403)"
         _log(f"Relay complete. Sent {sent}, skipped {skipped}.")
         return f"Relayed: sent={sent}, skipped={skipped}"
 
@@ -116,6 +125,9 @@ def send_media_job(
             existing = client.fetch_existing_filenames(
                 target_channel_id, max_messages=history_limit, request_timeout=request_timeout
             )
+        except DiscordAuthError as e:
+            _log(f"Authentication error during dedupe: {e}")
+            return "Aborted: authentication failed (401/403)"
         except Exception as e:
             existing = set()
             _log(f"Warning: dedupe fetch failed, proceeding without dedupe: {e}")
@@ -180,6 +192,9 @@ def send_media_job(
             if rk in segmented_keys and sent_for_key[rk] == 0:
                 try:
                     client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                except DiscordAuthError as e:
+                    _log(f"Authentication error while sending separator: {e}")
+                    return "Aborted: authentication failed (401/403)"
                 except Exception as e:
                     _log(f"Warning: failed to send separator for {rk}: {e}")
                 time.sleep(max(0.0, delay_seconds))
@@ -188,6 +203,9 @@ def send_media_job(
                 _log(f"Uploading: {', '.join(p.name for p in files)}")
                 client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
                 sent_count += len(files)
+            except DiscordAuthError as e:
+                _log(f"Authentication error while uploading: {e}")
+                return "Aborted: authentication failed (401/403)"
             except Exception as e:
                 _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
             finally:
@@ -197,6 +215,9 @@ def send_media_job(
             if rk in segmented_keys and sent_for_key[rk] == counts[rk]:
                 try:
                     client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                except DiscordAuthError as e:
+                    _log(f"Authentication error while sending separator: {e}")
+                    return "Aborted: authentication failed (401/403)"
                 except Exception as e:
                     _log(f"Warning: failed to send separator for {rk}: {e}")
                 time.sleep(max(0.0, delay_seconds))
@@ -227,6 +248,9 @@ def send_media_job(
                     )
                     with lock:
                         sent_count += len(files)
+                except DiscordAuthError as e:
+                    _log(f"Authentication error while uploading: {e}")
+                    return "Aborted: authentication failed (401/403)"
                 except Exception as e:
                     _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
                 finally:

@@ -621,7 +621,12 @@ def launch_gui() -> None:
             return
         if adv.save_token_var.get():
             try:
+                # Persist to .env and update current process env for immediate use
                 set_env_var("DISCORD_TOKEN", token)
+                try:
+                    os.environ["DISCORD_TOKEN"] = token
+                except Exception:
+                    pass
                 run_pane.log("Saved token to .env")
             except Exception as e:
                 run_pane.log(f"Failed to save token: {e}")
@@ -772,7 +777,7 @@ def launch_gui() -> None:
             jobs_list.set_jobs(norm_jobs)
             _refresh_per_job_fields()
         # Restore advanced options
-        adv.token_var.set(cfg.get("token") or adv.token_var.get())
+        # Do not persist or restore token from GUI config for security
         adv.save_token_var.set(bool(cfg.get("save_token", True)))
         adv.token_type_var.set(cfg.get("token_type") or adv.token_type_var.get())
         adv.ignore_dedupe_var.set(bool(cfg.get("ignore_dedupe", False)))
@@ -797,7 +802,7 @@ def launch_gui() -> None:
         return {
             "theme": theme_var.get(),
             "jobs": [{"input": str(p), "url": u} for p, u in jobs_list.get_jobs()],
-            "token": adv.token_var.get(),
+            # Do not persist token in GUI config
             "save_token": bool(adv.save_token_var.get()),
             "token_type": adv.token_type_var.get(),
             "ignore_dedupe": bool(adv.ignore_dedupe_var.get()),

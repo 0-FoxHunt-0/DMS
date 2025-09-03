@@ -11,6 +11,11 @@ import requests
 DISCORD_API = "https://discord.com/api/v10"
 
 
+class DiscordAuthError(Exception):
+    """Raised when Discord returns 401/403 and the token/permissions are invalid."""
+    pass
+
+
 def _auth_header(token: str, token_type: str) -> str:
     if token_type.lower() == "bot":
         return f"Bot {token}"
@@ -88,7 +93,11 @@ class DiscordClient:
     def get_channel(self, channel_id: str, request_timeout: float = 30.0) -> Optional[dict]:
         url = f"{DISCORD_API}/channels/{channel_id}"
         resp = self._request_with_retries("GET", url, timeout=request_timeout)
-        if resp is None or not (200 <= resp.status_code < 300):
+        if resp is None:
+            return None
+        if resp.status_code in (401, 403):
+            raise DiscordAuthError(f"Discord get_channel failed: {resp.status_code}")
+        if not (200 <= resp.status_code < 300):
             return None
         try:
             return resp.json()
@@ -145,13 +154,7 @@ class DiscordClient:
                 break
             # Handle auth/permission errors explicitly to aid UX
             if resp.status_code in (401, 403):
-                import logging as _logging
-                try:
-                    details = resp.json()
-                except Exception:
-                    details = resp.text
-                _logging.error(f"Dedupe fetch unauthorized/forbidden: {resp.status_code} {details}")
-                break
+                raise DiscordAuthError(f"Discord dedupe fetch failed: {resp.status_code}")
             try:
                 messages = resp.json()
             except Exception:
@@ -219,7 +222,11 @@ class DiscordClient:
             if content:
                 data["content"] = content
             resp = self._request_with_retries("POST", url, data=data, files=multipart_files, timeout=timeout)
-            if resp is None or resp.status_code not in (200, 201):
+            if resp is None:
+                raise RuntimeError("Discord upload failed: no response")
+            if resp.status_code in (401, 403):
+                raise DiscordAuthError(f"Discord upload unauthorized: {resp.status_code}")
+            if resp.status_code not in (200, 201):
                 status = getattr(resp, "status_code", "unknown")
                 text = getattr(resp, "text", "")
                 raise RuntimeError(f"Discord upload failed: {status} {text}")
@@ -234,7 +241,11 @@ class DiscordClient:
         url = f"{DISCORD_API}/channels/{channel_id}/messages"
         payload = {"content": content}
         resp = self._request_with_retries("POST", url, json=payload, timeout=timeout)
-        if resp is None or resp.status_code not in (200, 201):
+        if resp is None:
+            raise RuntimeError("Discord text message failed: no response")
+        if resp.status_code in (401, 403):
+            raise DiscordAuthError(f"Discord text message unauthorized: {resp.status_code}")
+        if resp.status_code not in (200, 201):
             status = getattr(resp, "status_code", "unknown")
             text = getattr(resp, "text", "")
             raise RuntimeError(f"Discord text message failed: {status} {text}")
@@ -319,6 +330,8 @@ class DiscordClient(DiscordClient):
             resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
             if resp is None:
                 break
+            if resp.status_code in (401, 403):
+                raise DiscordAuthError(f"Discord collect_media unauthorized: {resp.status_code}")
             messages = resp.json()
             if not messages:
                 break
