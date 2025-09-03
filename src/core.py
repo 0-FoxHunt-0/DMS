@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
+import threading
+from queue import Queue, Empty
 
 from .discord_client import DiscordClient
 from .scanner import scan_media
@@ -30,6 +32,7 @@ def send_media_job(
     cancel_event: Optional[object] = None,
     on_log: Optional[callable] = None,
     on_thread_created: Optional[callable] = None,
+    concurrency: int = 1,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -106,7 +109,8 @@ def send_media_job(
     scan = scan_media(input_dir)
     if not ignore_dedupe:
         _log("Fetching recent filenames for dedupe...")
-        existing = client.fetch_existing_filenames(channel_id, max_messages=history_limit, request_timeout=request_timeout)
+        # IMPORTANT: dedupe must use the actual destination (thread if created/provided)
+        existing = client.fetch_existing_filenames(target_channel_id, max_messages=history_limit, request_timeout=request_timeout)
         scan = scan.filter_against_filenames(existing)
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
 
@@ -119,12 +123,16 @@ def send_media_job(
         except Exception:
             return False
 
+    # Build tasks upfront, applying size checks
+    Task = List[Path]
+    tasks: List[Task] = []
+
     for pair in scan.pairs:
         if _should_cancel():
             return f"Cancelled after sending {sent_count} file(s)"
         mp4_ok = pair.mp4_path.stat().st_size <= bytes_limit
         gif_ok = pair.gif_path.stat().st_size <= bytes_limit
-        files_to_send = []
+        files_to_send: List[Path] = []
         if mp4_ok or not skip_oversize:
             files_to_send.append(pair.mp4_path)
         else:
@@ -133,20 +141,8 @@ def send_media_job(
             files_to_send.append(pair.gif_path)
         else:
             skipped_oversize += 1
-        if not files_to_send:
-            continue
-        try:
-            _log(f"Uploading pair: {', '.join(p.name for p in files_to_send)}")
-            client.send_message_with_files(
-                channel_id=target_channel_id,
-                files=files_to_send,
-                content=None,
-                timeout=upload_timeout,
-            )
-            sent_count += len(files_to_send)
-        except Exception as e:
-            _log(f"Failed to upload pair '{pair.root_key}': {e}")
-        time.sleep(max(0.0, delay_seconds))
+        if files_to_send:
+            tasks.append(files_to_send)
 
     for single in scan.singles:
         if _should_cancel():
@@ -155,18 +151,55 @@ def send_media_job(
         if not size_ok and skip_oversize:
             skipped_oversize += 1
             continue
-        try:
-            _log(f"Uploading single: {single.path.name}")
-            client.send_message_with_files(
-                channel_id=target_channel_id,
-                files=[single.path],
-                content=None,
-                timeout=upload_timeout,
-            )
-            sent_count += 1
-        except Exception as e:
-            _log(f"Failed to upload '{single.path.name}': {e}")
-        time.sleep(max(0.0, delay_seconds))
+        tasks.append([single.path])
+
+    # If dry-run, just report planned actions
+    if dry_run:
+        _log(f"Dry run: {len(tasks)} message(s) would be sent. Skipped {skipped_oversize} oversize file(s).")
+        return f"Dry run. Planned {len(tasks)} message(s). Skipped {skipped_oversize} oversize file(s)."
+
+    # Bounded concurrent uploader using worker threads and a task queue
+    q: Queue = Queue()
+    for t in tasks:
+        q.put(t)
+
+    lock = threading.Lock()
+
+    def _worker(worker_index: int) -> None:
+        nonlocal sent_count
+        while True:
+            if _should_cancel():
+                break
+            try:
+                files: List[Path] = q.get_nowait()
+            except Empty:
+                break
+            try:
+                _log(f"Uploading: {', '.join(p.name for p in files)}")
+                client.send_message_with_files(
+                    channel_id=target_channel_id,
+                    files=files,
+                    content=None,
+                    timeout=upload_timeout,
+                )
+                with lock:
+                    sent_count += len(files)
+            except Exception as e:
+                _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
+            finally:
+                q.task_done()
+                # Per-message delay to avoid hammering the API
+                time.sleep(max(0.0, delay_seconds))
+
+    max_workers = max(1, int(concurrency))
+    threads: List[threading.Thread] = []
+    for i in range(max_workers):
+        t = threading.Thread(target=_worker, args=(i,), daemon=True)
+        threads.append(t)
+        t.start()
+    # Wait for all tasks to finish or cancellation
+    for t in threads:
+        t.join()
 
     if skipped_oversize:
         _log(f"Finished. Sent {sent_count}, skipped {skipped_oversize} oversize file(s).")

@@ -191,6 +191,9 @@ class AdvancedOptions(ttk.LabelFrame):
         add_num("Upload timeout (s):", 5, self.upload_timeout_var, "120.0")
         add_num("Delay (s):", 6, self.delay_seconds_var, "1.0")
         add_num("Max file MB:", 7, self.max_file_mb_var, "10.0")
+        # Concurrency (messages in-flight per job)
+        self.concurrency_var = tk.StringVar()
+        add_num("Concurrency:", 12, self.concurrency_var, "1")
 
         # Forum/media options
         ttk.Label(self, text="Post title:").grid(row=8, column=0, sticky="w")
@@ -212,7 +215,7 @@ class AdvancedOptions(ttk.LabelFrame):
 
         # Per-job post overrides section (hidden until needed)
         self._per_job_frame = ttk.LabelFrame(self, text="Per-job post fields")
-        self._per_job_frame.grid(row=12, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        self._per_job_frame.grid(row=13, column=0, columnspan=3, sticky="we", pady=(8, 0))
         ttk.Label(self._per_job_frame, text="#").grid(row=0, column=0, sticky="w", padx=(4, 8))
         ttk.Label(self._per_job_frame, text="Title").grid(row=0, column=1, sticky="w")
         ttk.Label(self._per_job_frame, text="Tag").grid(row=0, column=2, sticky="w", padx=(8, 0))
@@ -644,6 +647,7 @@ def launch_gui() -> None:
             delay_seconds=_to_float(adv.delay_seconds_var.get(), 1.0),
             max_file_mb=_to_float(adv.max_file_mb_var.get(), 10.0),
             skip_oversize=adv.skip_oversize_var.get(),
+            concurrency=_to_int(adv.concurrency_var.get(), 1),
         )
 
         run_button.config(state="disabled")
@@ -779,6 +783,7 @@ def launch_gui() -> None:
         adv.upload_timeout_var.set(str(cfg.get("upload_timeout", adv.upload_timeout_var.get())))
         adv.delay_seconds_var.set(str(cfg.get("delay_seconds", adv.delay_seconds_var.get())))
         adv.max_file_mb_var.set(str(cfg.get("max_file_mb", adv.max_file_mb_var.get())))
+        adv.concurrency_var.set(str(cfg.get("concurrency", adv.concurrency_var.get() or "1")))
         adv.post_title_var.set(cfg.get("post_title", ""))
         adv.post_tag_var.set(cfg.get("post_tag", ""))
         adv.relay_from_var.set(cfg.get("relay_from", ""))
@@ -803,6 +808,7 @@ def launch_gui() -> None:
             "upload_timeout": _to_float(adv.upload_timeout_var.get(), 120.0),
             "delay_seconds": _to_float(adv.delay_seconds_var.get(), 1.0),
             "max_file_mb": _to_float(adv.max_file_mb_var.get(), 10.0),
+            "concurrency": _to_int(adv.concurrency_var.get(), 1),
             "post_title": adv.post_title_var.get(),
             "post_tag": adv.post_tag_var.get(),
             "relay_from": adv.relay_from_var.get(),

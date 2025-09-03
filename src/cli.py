@@ -1,4 +1,7 @@
 import time
+import threading
+from typing import List
+from queue import Queue, Empty
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -131,6 +134,7 @@ def send(
     delay_seconds: float = typer.Option(1.0, help="Delay between messages (seconds)"),
     max_file_mb: float = typer.Option(10.0, help="Skip files larger than this size (MB), unless overridden"),
     skip_oversize: bool = typer.Option(True, help="Skip files exceeding max_file_mb instead of attempting upload"),
+    concurrency: int = typer.Option(1, help="Number of concurrent uploads (messages)"),
 ) -> None:
     if log_file is None:
         default_dir = Path("logs")
@@ -215,7 +219,8 @@ def send(
 
     if not ignore_dedupe:
         rprint("[bold]Fetching existing filenames from channel for dedupe...[/bold]")
-        existing = client.fetch_existing_filenames(channel_id, max_messages=history_limit, request_timeout=request_timeout)
+        # IMPORTANT: dedupe must use the actual destination (thread if created/provided)
+        existing = client.fetch_existing_filenames(target_channel_id, max_messages=history_limit, request_timeout=request_timeout)
         before_pairs = len(scan.pairs)
         before_singles = len(scan.singles)
 
@@ -229,15 +234,16 @@ def send(
         return
 
     rprint("[bold]Uploading...[/bold]")
-    # Send pairs first, then singles
+    # Build tasks with size checks
     sent_count = 0
     skipped_oversize = 0
     bytes_limit = int(max_file_mb * 1024 * 1024)
+    tasks: List[List[Path]] = []
+
     for pair in scan.pairs:
-        # size checks
         mp4_ok = pair.mp4_path.stat().st_size <= bytes_limit
         gif_ok = pair.gif_path.stat().st_size <= bytes_limit
-        files_to_send = []
+        files_to_send: List[Path] = []
         if mp4_ok or not skip_oversize:
             files_to_send.append(pair.mp4_path)
         else:
@@ -246,38 +252,53 @@ def send(
             files_to_send.append(pair.gif_path)
         else:
             skipped_oversize += 1
-        if not files_to_send:
-            continue
-        try:
-            logging.info(f"Uploading pair: {', '.join(p.name for p in files_to_send)}")
-            client.send_message_with_files(
-                channel_id=target_channel_id,
-                files=files_to_send,
-                content=None,
-                timeout=upload_timeout,
-            )
-            sent_count += len(files_to_send)
-        except Exception as e:
-            rprint(f"[red]Failed to upload pair '{pair.root_key}': {e}[/red]")
-        time.sleep(max(0.0, delay_seconds))
+        if files_to_send:
+            tasks.append(files_to_send)
 
     for single in scan.singles:
         size_ok = single.path.stat().st_size <= bytes_limit
         if not size_ok and skip_oversize:
             skipped_oversize += 1
             continue
-        try:
-            logging.info(f"Uploading single: {single.path.name}")
-            client.send_message_with_files(
-                channel_id=target_channel_id,
-                files=[single.path],
-                content=None,
-                timeout=upload_timeout,
-            )
-            sent_count += 1
-        except Exception as e:
-            rprint(f"[red]Failed to upload '{single.path.name}': {e}[/red]")
-        time.sleep(max(0.0, delay_seconds))
+        tasks.append([single.path])
+
+    q: Queue = Queue()
+    for tsk in tasks:
+        q.put(tsk)
+
+    lock = threading.Lock()
+
+    def _worker(idx: int) -> None:
+        nonlocal sent_count
+        while True:
+            try:
+                files = q.get_nowait()
+            except Empty:
+                break
+            try:
+                logging.info(f"Uploading: {', '.join(p.name for p in files)}")
+                client.send_message_with_files(
+                    channel_id=target_channel_id,
+                    files=files,
+                    content=None,
+                    timeout=upload_timeout,
+                )
+                with lock:
+                    sent_count += len(files)
+            except Exception as e:
+                rprint(f"[red]Failed to upload {', '.join(p.name for p in files)}: {e}[/red]")
+            finally:
+                q.task_done()
+                time.sleep(max(0.0, delay_seconds))
+
+    max_workers = max(1, int(concurrency))
+    threads: List[threading.Thread] = []
+    for i in range(max_workers):
+        t = threading.Thread(target=_worker, args=(i,), daemon=True)
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
 
     if skipped_oversize:
         rprint(f"[yellow]Skipped {skipped_oversize} file(s) due to size over {max_file_mb:.2f} MB[/yellow]")
