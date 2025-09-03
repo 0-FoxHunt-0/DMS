@@ -197,6 +197,15 @@ class DiscordClient:
                 except Exception:
                     pass
 
+    def send_text_message(self, channel_id: str, content: str, timeout: float = 30.0) -> None:
+        url = f"{DISCORD_API}/channels/{channel_id}/messages"
+        payload = {"content": content}
+        resp = self._request_with_retries("POST", url, json=payload, timeout=timeout)
+        if resp is None or resp.status_code not in (200, 201):
+            status = getattr(resp, "status_code", "unknown")
+            text = getattr(resp, "text", "")
+            raise RuntimeError(f"Discord text message failed: {status} {text}")
+
     def _request_with_retries(self, method: str, url: str, max_retries: int = 5, timeout: float = 30.0, **kwargs):
         backoff = 1.0
         for attempt in range(max_retries):

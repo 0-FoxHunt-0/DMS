@@ -135,6 +135,8 @@ def send(
     max_file_mb: float = typer.Option(10.0, help="Skip files larger than this size (MB), unless overridden"),
     skip_oversize: bool = typer.Option(True, help="Skip files exceeding max_file_mb instead of attempting upload"),
     concurrency: int = typer.Option(1, help="Number of concurrent uploads (messages)"),
+    segment_separators: bool = typer.Option(True, help="Send a separator message before and after each segmented group"),
+    separator_text: str = typer.Option("┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃", help="Text used as the separator message"),
 ) -> None:
     if log_file is None:
         default_dir = Path("logs")
@@ -234,11 +236,13 @@ def send(
         return
 
     rprint("[bold]Uploading...[/bold]")
-    # Build tasks with size checks
+    # Build items with size checks and keep track of root_keys
     sent_count = 0
     skipped_oversize = 0
     bytes_limit = int(max_file_mb * 1024 * 1024)
-    tasks: List[List[Path]] = []
+    from typing import Tuple as _Tuple
+    TaskItem = _Tuple[str, List[Path]]  # (root_key, files)
+    items: List[TaskItem] = []
 
     for pair in scan.pairs:
         mp4_ok = pair.mp4_path.stat().st_size <= bytes_limit
@@ -253,52 +257,84 @@ def send(
         else:
             skipped_oversize += 1
         if files_to_send:
-            tasks.append(files_to_send)
+            items.append((pair.root_key, files_to_send))
 
     for single in scan.singles:
         size_ok = single.path.stat().st_size <= bytes_limit
         if not size_ok and skip_oversize:
             skipped_oversize += 1
             continue
-        tasks.append([single.path])
+        items.append((single.root_key, [single.path]))
 
-    q: Queue = Queue()
-    for tsk in tasks:
-        q.put(tsk)
+    # Determine segmented groups
+    from collections import Counter, defaultdict
+    counts = Counter(rk for rk, _files in items)
+    segmented_keys = {rk for rk, c in counts.items() if c > 1}
 
-    lock = threading.Lock()
+    if segment_separators and segmented_keys:
+        sent_for_key = defaultdict(int)
+        for rk, files in items:
+            if rk in segmented_keys and sent_for_key[rk] == 0:
+                try:
+                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                except Exception as e:
+                    rprint(f"[yellow]Warning: failed to send separator for {rk}: {e}[/yellow]")
+                time.sleep(max(0.0, delay_seconds))
 
-    def _worker(idx: int) -> None:
-        nonlocal sent_count
-        while True:
-            try:
-                files = q.get_nowait()
-            except Empty:
-                break
             try:
                 logging.info(f"Uploading: {', '.join(p.name for p in files)}")
-                client.send_message_with_files(
-                    channel_id=target_channel_id,
-                    files=files,
-                    content=None,
-                    timeout=upload_timeout,
-                )
-                with lock:
-                    sent_count += len(files)
+                client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
+                sent_count += len(files)
             except Exception as e:
                 rprint(f"[red]Failed to upload {', '.join(p.name for p in files)}: {e}[/red]")
             finally:
-                q.task_done()
+                sent_for_key[rk] += 1
                 time.sleep(max(0.0, delay_seconds))
 
-    max_workers = max(1, int(concurrency))
-    threads: List[threading.Thread] = []
-    for i in range(max_workers):
-        t = threading.Thread(target=_worker, args=(i,), daemon=True)
-        threads.append(t)
-        t.start()
-    for t in threads:
-        t.join()
+            if rk in segmented_keys and sent_for_key[rk] == counts[rk]:
+                try:
+                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                except Exception as e:
+                    rprint(f"[yellow]Warning: failed to send separator for {rk}: {e}[/yellow]")
+                time.sleep(max(0.0, delay_seconds))
+    else:
+        q: Queue = Queue()
+        for _rk, files in items:
+            q.put(files)
+
+        lock = threading.Lock()
+
+        def _worker(idx: int) -> None:
+            nonlocal sent_count
+            while True:
+                try:
+                    files = q.get_nowait()
+                except Empty:
+                    break
+                try:
+                    logging.info(f"Uploading: {', '.join(p.name for p in files)}")
+                    client.send_message_with_files(
+                        channel_id=target_channel_id,
+                        files=files,
+                        content=None,
+                        timeout=upload_timeout,
+                    )
+                    with lock:
+                        sent_count += len(files)
+                except Exception as e:
+                    rprint(f"[red]Failed to upload {', '.join(p.name for p in files)}: {e}[/red]")
+                finally:
+                    q.task_done()
+                    time.sleep(max(0.0, delay_seconds))
+
+        max_workers = max(1, int(concurrency))
+        threads: List[threading.Thread] = []
+        for i in range(max_workers):
+            t = threading.Thread(target=_worker, args=(i,), daemon=True)
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
 
     if skipped_oversize:
         rprint(f"[yellow]Skipped {skipped_oversize} file(s) due to size over {max_file_mb:.2f} MB[/yellow]")

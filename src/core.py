@@ -33,6 +33,8 @@ def send_media_job(
     on_log: Optional[callable] = None,
     on_thread_created: Optional[callable] = None,
     concurrency: int = 1,
+    segment_separators: bool = True,
+    separator_text: str = "┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃",
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -123,9 +125,10 @@ def send_media_job(
         except Exception:
             return False
 
-    # Build tasks upfront, applying size checks
-    Task = List[Path]
-    tasks: List[Task] = []
+    # Build items with size checks and keep track of root_keys
+    from typing import Tuple as _Tuple
+    TaskItem = _Tuple[str, List[Path]]  # (root_key, files)
+    items: List[TaskItem] = []
 
     for pair in scan.pairs:
         if _should_cancel():
@@ -142,7 +145,7 @@ def send_media_job(
         else:
             skipped_oversize += 1
         if files_to_send:
-            tasks.append(files_to_send)
+            items.append((pair.root_key, files_to_send))
 
     for single in scan.singles:
         if _should_cancel():
@@ -151,55 +154,89 @@ def send_media_job(
         if not size_ok and skip_oversize:
             skipped_oversize += 1
             continue
-        tasks.append([single.path])
+        items.append((single.root_key, [single.path]))
 
     # If dry-run, just report planned actions
     if dry_run:
-        _log(f"Dry run: {len(tasks)} message(s) would be sent. Skipped {skipped_oversize} oversize file(s).")
-        return f"Dry run. Planned {len(tasks)} message(s). Skipped {skipped_oversize} oversize file(s)."
+        _log(f"Dry run: {len(items)} message(s) would be sent. Skipped {skipped_oversize} oversize file(s).")
+        return f"Dry run. Planned {len(items)} message(s). Skipped {skipped_oversize} oversize file(s)."
 
-    # Bounded concurrent uploader using worker threads and a task queue
-    q: Queue = Queue()
-    for t in tasks:
-        q.put(t)
+    # Determine segmented groups
+    from collections import Counter, defaultdict
+    counts = Counter(rk for rk, _files in items)
+    segmented_keys = {rk for rk, c in counts.items() if c > 1}
 
-    lock = threading.Lock()
-
-    def _worker(worker_index: int) -> None:
-        nonlocal sent_count
-        while True:
+    if segment_separators and segmented_keys:
+        sent_for_key = defaultdict(int)
+        for rk, files in items:
             if _should_cancel():
                 break
-            try:
-                files: List[Path] = q.get_nowait()
-            except Empty:
-                break
+            if rk in segmented_keys and sent_for_key[rk] == 0:
+                try:
+                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                except Exception as e:
+                    _log(f"Warning: failed to send separator for {rk}: {e}")
+                time.sleep(max(0.0, delay_seconds))
+
             try:
                 _log(f"Uploading: {', '.join(p.name for p in files)}")
-                client.send_message_with_files(
-                    channel_id=target_channel_id,
-                    files=files,
-                    content=None,
-                    timeout=upload_timeout,
-                )
-                with lock:
-                    sent_count += len(files)
+                client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
+                sent_count += len(files)
             except Exception as e:
                 _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
             finally:
-                q.task_done()
-                # Per-message delay to avoid hammering the API
+                sent_for_key[rk] += 1
                 time.sleep(max(0.0, delay_seconds))
 
-    max_workers = max(1, int(concurrency))
-    threads: List[threading.Thread] = []
-    for i in range(max_workers):
-        t = threading.Thread(target=_worker, args=(i,), daemon=True)
-        threads.append(t)
-        t.start()
-    # Wait for all tasks to finish or cancellation
-    for t in threads:
-        t.join()
+            if rk in segmented_keys and sent_for_key[rk] == counts[rk]:
+                try:
+                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                except Exception as e:
+                    _log(f"Warning: failed to send separator for {rk}: {e}")
+                time.sleep(max(0.0, delay_seconds))
+    else:
+        # Bounded concurrent uploader using worker threads and a task queue
+        q: Queue = Queue()
+        for _rk, files in items:
+            q.put(files)
+
+        lock = threading.Lock()
+
+        def _worker(worker_index: int) -> None:
+            nonlocal sent_count
+            while True:
+                if _should_cancel():
+                    break
+                try:
+                    files: List[Path] = q.get_nowait()
+                except Empty:
+                    break
+                try:
+                    _log(f"Uploading: {', '.join(p.name for p in files)}")
+                    client.send_message_with_files(
+                        channel_id=target_channel_id,
+                        files=files,
+                        content=None,
+                        timeout=upload_timeout,
+                    )
+                    with lock:
+                        sent_count += len(files)
+                except Exception as e:
+                    _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
+                finally:
+                    q.task_done()
+                    # Per-message delay to avoid hammering the API
+                    time.sleep(max(0.0, delay_seconds))
+
+        max_workers = max(1, int(concurrency))
+        threads: List[threading.Thread] = []
+        for i in range(max_workers):
+            t = threading.Thread(target=_worker, args=(i,), daemon=True)
+            threads.append(t)
+            t.start()
+        # Wait for all tasks to finish or cancellation
+        for t in threads:
+            t.join()
 
     if skipped_oversize:
         _log(f"Finished. Sent {sent_count}, skipped {skipped_oversize} oversize file(s).")
