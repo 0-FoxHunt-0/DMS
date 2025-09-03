@@ -141,19 +141,49 @@ class DiscordClient:
                 params["before"] = last_id
             resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
             if resp is None:
+                # Network or retry exhaustion; stop dedupe rather than crashing
                 break
-            messages = resp.json()
+            # Handle auth/permission errors explicitly to aid UX
+            if resp.status_code in (401, 403):
+                import logging as _logging
+                try:
+                    details = resp.json()
+                except Exception:
+                    details = resp.text
+                _logging.error(f"Dedupe fetch unauthorized/forbidden: {resp.status_code} {details}")
+                break
+            try:
+                messages = resp.json()
+            except Exception:
+                # Unexpected payload; stop dedupe quietly
+                break
+            # Some error responses are dict/str; ensure list before iterating
+            if not isinstance(messages, list):
+                import logging as _logging
+                _logging.error(f"Unexpected response type for messages: {type(messages).__name__}")
+                break
             if not messages:
                 break
             for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
                 # attachments
-                for att in msg.get("attachments", []):
+                for att in msg.get("attachments", []) or []:
+                    if not isinstance(att, dict):
+                        continue
                     fn = att.get("filename") or self._extract_filename_from_url(att.get("url", ""))
                     if fn:
                         existing.add(fn)
                 # embeds (image/video URLs)
-                for emb in msg.get("embeds", []):
-                    url_fields = [emb.get("url"), emb.get("thumbnail", {}).get("url"), emb.get("video", {}).get("url"), emb.get("image", {}).get("url")]
+                for emb in msg.get("embeds", []) or []:
+                    if not isinstance(emb, dict):
+                        continue
+                    url_fields = [
+                        emb.get("url"),
+                        (emb.get("thumbnail", {}) or {}).get("url"),
+                        (emb.get("video", {}) or {}).get("url"),
+                        (emb.get("image", {}) or {}).get("url"),
+                    ]
                     for u in url_fields:
                         if not u:
                             continue
@@ -161,7 +191,10 @@ class DiscordClient:
                         if fn:
                             existing.add(fn)
             fetched += len(messages)
-            last_id = messages[-1]["id"]
+            try:
+                last_id = messages[-1]["id"]
+            except Exception:
+                break
 
         return existing
 

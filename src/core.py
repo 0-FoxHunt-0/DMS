@@ -111,8 +111,14 @@ def send_media_job(
     scan = scan_media(input_dir)
     if not ignore_dedupe:
         _log("Fetching recent filenames for dedupe...")
-        # IMPORTANT: dedupe must use the actual destination (thread if created/provided)
-        existing = client.fetch_existing_filenames(target_channel_id, max_messages=history_limit, request_timeout=request_timeout)
+        try:
+            # IMPORTANT: dedupe must use the actual destination (thread if created/provided)
+            existing = client.fetch_existing_filenames(
+                target_channel_id, max_messages=history_limit, request_timeout=request_timeout
+            )
+        except Exception as e:
+            existing = set()
+            _log(f"Warning: dedupe fetch failed, proceeding without dedupe: {e}")
         scan = scan.filter_against_filenames(existing)
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
 
