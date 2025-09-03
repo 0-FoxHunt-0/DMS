@@ -465,6 +465,7 @@ def _apply_theme(root: tk.Tk, run_pane: RunPane, mode: str) -> None:
     bg_dark = "#1e1e1e"
     fg_dark = "#f0f0f0"
     entry_dark = "#2b2b2b"
+    select_dark = "#3a3a3a"
     bg_light = "#ffffff"
     fg_light = "#000000"
 
@@ -481,7 +482,24 @@ def _apply_theme(root: tk.Tk, run_pane: RunPane, mode: str) -> None:
         style.configure("TButton", background=bg_dark, foreground=fg_dark)
         style.configure("TCheckbutton", background=bg_dark, foreground=fg_dark)
         style.configure("TEntry", fieldbackground=entry_dark, foreground=fg_dark)
-        style.configure("TCombobox", fieldbackground=entry_dark, foreground=fg_dark)
+        style.configure("TCombobox", fieldbackground=entry_dark, foreground=fg_dark, background=entry_dark)
+        # Ensure hover/active visuals keep dark backgrounds
+        try:
+            style.map("TCheckbutton", background=[("active", bg_dark)])
+            style.map("TButton", background=[("active", entry_dark)])
+            style.map("TCombobox", fieldbackground=[("readonly", entry_dark), ("!disabled", entry_dark)])
+            style.map("TCombobox", background=[("active", entry_dark), ("readonly", entry_dark)])
+            style.map("TCombobox", foreground=[("readonly", fg_dark)])
+        except Exception:
+            pass
+        # Style the Combobox dropdown list (not covered by ttk styles)
+        try:
+            root.option_add('*TCombobox*Listbox*Background', entry_dark)
+            root.option_add('*TCombobox*Listbox*Foreground', fg_dark)
+            root.option_add('*TCombobox*Listbox*selectBackground', select_dark)
+            root.option_add('*TCombobox*Listbox*selectForeground', fg_dark)
+        except Exception:
+            pass
         root.configure(bg=bg_dark)
         try:
             run_pane._canvas.configure(bg=bg_dark)
@@ -503,7 +521,23 @@ def _apply_theme(root: tk.Tk, run_pane: RunPane, mode: str) -> None:
         style.configure("TButton", background=bg_light, foreground=fg_light)
         style.configure("TCheckbutton", background=bg_light, foreground=fg_light)
         style.configure("TEntry", fieldbackground=bg_light, foreground=fg_light)
-        style.configure("TCombobox", fieldbackground=bg_light, foreground=fg_light)
+        style.configure("TCombobox", fieldbackground=bg_light, foreground=fg_light, background=bg_light)
+        try:
+            style.map("TCheckbutton", background=[("active", bg_light)])
+            style.map("TButton", background=[("active", "#e6e6e6")])
+            style.map("TCombobox", fieldbackground=[("readonly", bg_light), ("!disabled", bg_light)])
+            style.map("TCombobox", background=[("active", bg_light), ("readonly", bg_light)])
+            style.map("TCombobox", foreground=[("readonly", fg_light)])
+        except Exception:
+            pass
+        # Dropdown list colors for light mode
+        try:
+            root.option_add('*TCombobox*Listbox*Background', bg_light)
+            root.option_add('*TCombobox*Listbox*Foreground', fg_light)
+            root.option_add('*TCombobox*Listbox*selectBackground', "#cce8ff")
+            root.option_add('*TCombobox*Listbox*selectForeground', fg_light)
+        except Exception:
+            pass
         root.configure(bg=bg_light)
         try:
             run_pane._canvas.configure(bg=bg_light)
