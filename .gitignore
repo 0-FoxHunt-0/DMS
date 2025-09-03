@@ -1,7 +1,69 @@
+.gitignore
+
+# Environment and secrets
 .env
-venv/
+.env.local
+.env.*.local
+.envrc
+
+# Python bytecode/caches
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build/distribution
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Coverage/testing
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Editors/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+
+# Project specific
 logs/
-
-
+.adms_gui.json
+.adms_cache/
+*.log
