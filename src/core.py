@@ -131,6 +131,11 @@ def send_media_job(
         except Exception as e:
             existing = set()
             _log(f"Warning: dedupe fetch failed, proceeding without dedupe: {e}")
+        # New: report the dedupe catalog size
+        try:
+            _log(f"Dedupe catalog size: {len(existing)} filename(s)")
+        except Exception:
+            pass
         scan = scan.filter_against_filenames(existing)
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
 

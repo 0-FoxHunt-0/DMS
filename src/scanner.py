@@ -51,9 +51,12 @@ class ScanResult:
         filtered_pairs: List[PairItem] = []
         leftover_singles: List[SingleItem] = []
 
+        # Normalize existing names to lowercase for case-insensitive compare
+        existing_l = {name.lower() for name in existing}
+
         for pair in self.pairs:
-            mp4_exists = pair.mp4_path.name in existing
-            gif_exists = pair.gif_path.name in existing
+            mp4_exists = pair.mp4_path.name.lower() in existing_l
+            gif_exists = pair.gif_path.name.lower() in existing_l
             if not mp4_exists and not gif_exists:
                 filtered_pairs.append(pair)
             else:
@@ -62,7 +65,7 @@ class ScanResult:
                 if not gif_exists:
                     leftover_singles.append(SingleItem(root_key=pair.root_key, path=pair.gif_path))
 
-        filtered_singles: List[SingleItem] = [s for s in self.singles if s.path.name not in existing]
+        filtered_singles: List[SingleItem] = [s for s in self.singles if s.path.name.lower() not in existing_l]
         filtered_singles.extend(leftover_singles)
 
         return ScanResult(pairs=filtered_pairs, singles=filtered_singles)

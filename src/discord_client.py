@@ -176,7 +176,7 @@ class DiscordClient:
                         continue
                     fn = att.get("filename") or self._extract_filename_from_url(att.get("url", ""))
                     if fn:
-                        existing.add(fn)
+                        existing.add(fn.lower())
                 # embeds (image/video URLs)
                 for emb in msg.get("embeds", []) or []:
                     if not isinstance(emb, dict):
@@ -192,7 +192,7 @@ class DiscordClient:
                             continue
                         fn = self._extract_filename_from_url(u)
                         if fn:
-                            existing.add(fn)
+                            existing.add(fn.lower())
             fetched += len(messages)
             try:
                 last_id = messages[-1]["id"]
