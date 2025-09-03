@@ -647,12 +647,15 @@ def launch_gui() -> None:
                         job_params["post_title"] = title_override
                     if tag_override:
                         job_params["post_tag"] = tag_override
+                    def make_logger(itm: dict):
+                        return lambda msg: run_pane.log_to(itm, msg)
                     futures.append(ex.submit(
                         send_media_job,
                         input_dir=p,
                         channel_url=url,
                         **job_params,
                         cancel_event=cancel_event,
+                        on_log=make_logger(item),
                     ))
                 for i, f in enumerate(as_completed(futures)):
                     try:
