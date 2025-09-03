@@ -40,6 +40,28 @@ def _setup_logging(log_file: Path) -> None:
     fh.setFormatter(fmt)
     root.addHandler(fh)
 
+
+def _cleanup_old_logs(log_dir: Path, keep: int = 5) -> None:
+    """Remove old run_*.log files, keeping the most recent `keep` files.
+
+    This is a lightweight cleanup to prevent unbounded growth of the logs directory.
+    """
+    try:
+        if not log_dir.exists():
+            return
+        log_files = list(log_dir.glob("run_*.log"))
+        # Sort newest first by modification time
+        log_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in log_files[keep:]:
+            try:
+                old.unlink()
+            except Exception:
+                # Best-effort cleanup; ignore files that cannot be deleted
+                pass
+    except Exception:
+        # Never let cleanup errors impact the main flow
+        pass
+
 app = typer.Typer(add_completion=False, help="Send media to Discord, pairing MP4+GIF and handling segments.")
 
 
@@ -53,6 +75,37 @@ def _print_plan(result: ScanResult) -> None:
     for single in result.singles:
         table.add_row("single", single.path.name)
     rprint(table)
+
+
+@app.callback(invoke_without_command=True)
+def _root(gui: bool = typer.Option(False, "--gui", help="Launch the GUI and exit")) -> None:
+    """Root options for the CLI.
+
+    Providing --gui will open the graphical interface and exit.
+    """
+    if gui:
+        try:
+            from .gui import launch_gui
+            launch_gui()
+        except Exception as e:
+            rprint(f"[red]Failed to launch GUI: {e}[/red]")
+            raise typer.Exit(code=1)
+        raise typer.Exit(code=0)
+    # If invoked with no command and no --gui, show help
+    # Typer supplies context, but we keep it simple here and just print help via rprint
+    # so that `python main.py` without args shows the commands.
+    raise typer.Exit(code=2)
+
+
+@app.command()
+def gui() -> None:
+    """Launch the graphical user interface."""
+    try:
+        from .gui import launch_gui
+        launch_gui()
+    except Exception as e:
+        rprint(f"[red]Failed to launch GUI: {e}[/red]")
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -84,6 +137,8 @@ def send(
         log_file = default_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     _setup_logging(log_file)
     rprint(f"[green]Logging to {log_file}[/green]")
+    # Best-effort: keep only the last 5 run logs
+    _cleanup_old_logs(log_file.parent, keep=5)
     if not token:
         rprint("[yellow]No token found. You'll be prompted and can save it for reuse.[/yellow]")
         token = typer.prompt("Enter Discord token", hide_input=True)
