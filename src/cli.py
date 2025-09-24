@@ -3,7 +3,7 @@ import threading
 from typing import List
 from queue import Queue, Empty
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Tuple, Optional
 
 import typer
 from rich import print as rprint
@@ -13,7 +13,8 @@ from rich.table import Table
 
 from .discord_client import DiscordClient
 from .scanner import ScanResult, scan_media
-from .config import load_env, set_env_var
+from .core import send_media_job
+from .config import load_env, set_env_var, LOG_DIR
 
 
 load_env()
@@ -81,7 +82,10 @@ def _print_plan(result: ScanResult) -> None:
 
 
 @app.callback(invoke_without_command=True)
-def _root(gui: bool = typer.Option(False, "--gui", help="Launch the GUI and exit")) -> None:
+def _root(
+    ctx: typer.Context,
+    gui: bool = typer.Option(False, "--gui", help="Launch the GUI and exit"),
+) -> None:
     """Root options for the CLI.
 
     Providing --gui will open the graphical interface and exit.
@@ -94,10 +98,14 @@ def _root(gui: bool = typer.Option(False, "--gui", help="Launch the GUI and exit
             rprint(f"[red]Failed to launch GUI: {e}[/red]")
             raise typer.Exit(code=1)
         raise typer.Exit(code=0)
-    # If invoked with no command and no --gui, show help
-    # Typer supplies context, but we keep it simple here and just print help via rprint
-    # so that `python main.py` without args shows the commands.
-    raise typer.Exit(code=2)
+    # If invoked with no command and no --gui, launch the GUI by default
+    try:
+        from .gui import launch_gui
+        launch_gui()
+    except Exception as e:
+        rprint(f"[red]Failed to launch GUI: {e}[/red]")
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
 
 
 @app.command()
@@ -139,7 +147,11 @@ def send(
     separator_text: str = typer.Option("┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃", help="Text used as the separator message"),
 ) -> None:
     if log_file is None:
-        default_dir = Path("logs")
+        default_dir = LOG_DIR
+        try:
+            default_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         log_file = default_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     _setup_logging(log_file)
     rprint(f"[green]Logging to {log_file}[/green]")
@@ -215,129 +227,35 @@ def send(
         rprint(f"[green]Relay complete.[/green] Sent {sent}, skipped {skipped}.")
         return
 
-    rprint(f"[bold]Scanning:[/bold] {input_dir}")
-    scan = scan_media(input_dir)
-    _print_plan(scan)
+    # Delegate the actual work to the core job to avoid duplication
+    def _on_log(msg: str) -> None:
+        try:
+            rprint(msg)
+        except Exception:
+            pass
 
-    if not ignore_dedupe:
-        rprint("[bold]Fetching existing filenames from channel for dedupe...[/bold]")
-        # IMPORTANT: dedupe must use the actual destination (thread if created/provided)
-        existing = client.fetch_existing_filenames(target_channel_id, max_messages=history_limit, request_timeout=request_timeout)
-        before_pairs = len(scan.pairs)
-        before_singles = len(scan.singles)
-
-        scan = scan.filter_against_filenames(existing)
-        removed_pairs = before_pairs - len(scan.pairs)
-        removed_singles = before_singles - len(scan.singles)
-        rprint(f"Dedupe removed {removed_pairs} pairs and {removed_singles} singles")
-
-    if dry_run:
-        rprint("[yellow]Dry run: no uploads performed[/yellow]\n")
-        return
-
-    rprint("[bold]Uploading...[/bold]")
-    # Build items with size checks and keep track of root_keys
-    sent_count = 0
-    skipped_oversize = 0
-    bytes_limit = int(max_file_mb * 1024 * 1024)
-    from typing import Tuple as _Tuple
-    TaskItem = _Tuple[str, List[Path]]  # (root_key, files)
-    items: List[TaskItem] = []
-
-    for pair in scan.pairs:
-        mp4_ok = pair.mp4_path.stat().st_size <= bytes_limit
-        gif_ok = pair.gif_path.stat().st_size <= bytes_limit
-        files_to_send: List[Path] = []
-        if mp4_ok or not skip_oversize:
-            files_to_send.append(pair.mp4_path)
-        else:
-            skipped_oversize += 1
-        if gif_ok or not skip_oversize:
-            files_to_send.append(pair.gif_path)
-        else:
-            skipped_oversize += 1
-        if files_to_send:
-            items.append((pair.root_key, files_to_send))
-
-    for single in scan.singles:
-        size_ok = single.path.stat().st_size <= bytes_limit
-        if not size_ok and skip_oversize:
-            skipped_oversize += 1
-            continue
-        items.append((single.root_key, [single.path]))
-
-    # Determine segmented groups
-    from collections import Counter, defaultdict
-    counts = Counter(rk for rk, _files in items)
-    segmented_keys = {rk for rk, c in counts.items() if c > 1}
-
-    if segment_separators and segmented_keys:
-        sent_for_key = defaultdict(int)
-        for rk, files in items:
-            if rk in segmented_keys and sent_for_key[rk] == 0:
-                try:
-                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
-                except Exception as e:
-                    rprint(f"[yellow]Warning: failed to send separator for {rk}: {e}[/yellow]")
-                time.sleep(max(0.0, delay_seconds))
-
-            try:
-                logging.info(f"Uploading: {', '.join(p.name for p in files)}")
-                client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
-                sent_count += len(files)
-            except Exception as e:
-                rprint(f"[red]Failed to upload {', '.join(p.name for p in files)}: {e}[/red]")
-            finally:
-                sent_for_key[rk] += 1
-                time.sleep(max(0.0, delay_seconds))
-
-            if rk in segmented_keys and sent_for_key[rk] == counts[rk]:
-                try:
-                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
-                except Exception as e:
-                    rprint(f"[yellow]Warning: failed to send separator for {rk}: {e}[/yellow]")
-                time.sleep(max(0.0, delay_seconds))
-    else:
-        q: Queue = Queue()
-        for _rk, files in items:
-            q.put(files)
-
-        lock = threading.Lock()
-
-        def _worker(idx: int) -> None:
-            nonlocal sent_count
-            while True:
-                try:
-                    files = q.get_nowait()
-                except Empty:
-                    break
-                try:
-                    logging.info(f"Uploading: {', '.join(p.name for p in files)}")
-                    client.send_message_with_files(
-                        channel_id=target_channel_id,
-                        files=files,
-                        content=None,
-                        timeout=upload_timeout,
-                    )
-                    with lock:
-                        sent_count += len(files)
-                except Exception as e:
-                    rprint(f"[red]Failed to upload {', '.join(p.name for p in files)}: {e}[/red]")
-                finally:
-                    q.task_done()
-                    time.sleep(max(0.0, delay_seconds))
-
-        max_workers = max(1, int(concurrency))
-        threads: List[threading.Thread] = []
-        for i in range(max_workers):
-            t = threading.Thread(target=_worker, args=(i,), daemon=True)
-            threads.append(t)
-            t.start()
-        for t in threads:
-            t.join()
-
-    if skipped_oversize:
-        rprint(f"[yellow]Skipped {skipped_oversize} file(s) due to size over {max_file_mb:.2f} MB[/yellow]")
-    rprint(f"[green]Done. Sent {sent_count} file(s).[/green]")
+    result = send_media_job(
+        input_dir=input_dir,
+        channel_url=channel_url,
+        token=token,
+        token_type=token_type,
+        post_title=post_title,
+        post_tag=post_tag,
+        relay_from=relay_from,
+        relay_download_dir=relay_download_dir,
+        ignore_dedupe=ignore_dedupe,
+        dry_run=dry_run,
+        history_limit=history_limit,
+        request_timeout=request_timeout,
+        upload_timeout=upload_timeout,
+        delay_seconds=delay_seconds,
+        max_file_mb=max_file_mb,
+        skip_oversize=skip_oversize,
+        concurrency=concurrency,
+        segment_separators=segment_separators,
+        separator_text=separator_text,
+        on_log=_on_log,
+    )
+    rprint(f"[green]{result}[/green]")
 
 

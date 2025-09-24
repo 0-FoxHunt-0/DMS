@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from .config import load_env, set_env_var, PROJECT_ROOT
+from .config import load_env, set_env_var, CONFIG_DIR
 from .core import send_media_job
 from .discord_client import DiscordClient
 
@@ -442,7 +442,7 @@ def _to_int(s: str, default: int) -> int:
         return default
 
 
-CONFIG_PATH = PROJECT_ROOT / ".adms_gui.json"
+CONFIG_PATH = CONFIG_DIR / "adms_gui.json"
 
 
 def _load_config() -> dict:
@@ -726,12 +726,17 @@ def launch_gui() -> None:
                         on_log=make_logger(item),
                         on_thread_created=make_on_thread_created(idx, item, p.name),
                     ))
-                for i, f in enumerate(as_completed(futures)):
+                # Map futures to their corresponding UI panels to avoid index mismatches
+                future_to_item = {fut: itm for fut, itm in zip(futures, per_job_items)}
+                for f in as_completed(futures):
+                    item = future_to_item.get(f)
                     try:
                         result = f.result()
-                        run_pane.log_to(per_job_items[i], f"Done: {result}")
+                        if item is not None:
+                            run_pane.log_to(item, f"Done: {result}")
                     except Exception as e:
-                        run_pane.log_to(per_job_items[i], f"Failed: {e}")
+                        if item is not None:
+                            run_pane.log_to(item, f"Failed: {e}")
             run_pane.log_global("All jobs finished.")
             run_button.config(state="normal")
             scram_button.config(state="disabled")

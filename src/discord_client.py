@@ -69,7 +69,8 @@ class DiscordClient:
     @staticmethod
     def parse_channel_id_from_url(channel_url: str) -> Optional[str]:
         # https://discord.com/channels/<guild>/<channel>
-        m = re.search(r"discord\.com/channels/\d+/(\d+)", channel_url)
+        # Support optional subdomains: canary.discord.com, ptb.discord.com
+        m = re.search(r"(?:^|://)(?:canary\.|ptb\.)?discord\.com/channels/\d+/(\d+)", channel_url)
         if not m:
             return None
         return m.group(1)
@@ -82,7 +83,7 @@ class DiscordClient:
         - /channels/<guild>/<channel>/<thread>
         - /channels/<guild>/<channel>/threads/<thread>
         """
-        m = re.search(r"discord\.com/channels/(\d+)/(\d+)(?:/(?:threads/)?(\d+))?", channel_url)
+        m = re.search(r"(?:^|://)(?:canary\.|ptb\.)?discord\.com/channels/(\d+)/(\d+)(?:/(?:threads/)?(\d+))?", channel_url)
         if not m:
             return None, None, None
         guild_id = m.group(1)
@@ -120,7 +121,8 @@ class DiscordClient:
             payload["applied_tags"] = applied_tag_ids
         resp = self._request_with_retries("POST", url, json=payload, timeout=request_timeout)
         if resp is None:
-            print("[DEBUG] Thread creation: no response from Discord API")
+            import logging
+            logging.debug("Thread creation: no response from Discord API")
             return None
         if not (200 <= resp.status_code < 300):
             try:

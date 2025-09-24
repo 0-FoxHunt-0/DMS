@@ -234,10 +234,13 @@ def send_media_job(
 
         lock = threading.Lock()
 
+        # Shared signal to stop workers on fatal auth errors
+        stop_all = threading.Event()
+
         def _worker(worker_index: int) -> None:
             nonlocal sent_count
             while True:
-                if _should_cancel():
+                if _should_cancel() or stop_all.is_set():
                     break
                 try:
                     files: List[Path] = q.get_nowait()
@@ -255,7 +258,10 @@ def send_media_job(
                         sent_count += len(files)
                 except DiscordAuthError as e:
                     _log(f"Authentication error while uploading: {e}")
-                    return "Aborted: authentication failed (401/403)"
+                    # Signal all workers to stop and drain the queue
+                    stop_all.set()
+                    # Re-raise to be handled by outer join
+                    raise
                 except Exception as e:
                     _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
                 finally:
@@ -265,13 +271,23 @@ def send_media_job(
 
         max_workers = max(1, int(concurrency))
         threads: List[threading.Thread] = []
+        worker_errors: List[BaseException] = []
         for i in range(max_workers):
-            t = threading.Thread(target=_worker, args=(i,), daemon=True)
+            def _wrap(idx: int):
+                def _run():
+                    try:
+                        _worker(idx)
+                    except Exception as ex:
+                        worker_errors.append(ex)
+                return _run
+            t = threading.Thread(target=_wrap(i), daemon=True)
             threads.append(t)
             t.start()
         # Wait for all tasks to finish or cancellation
         for t in threads:
             t.join()
+        if worker_errors:
+            return "Aborted: authentication failed (401/403)"
 
     if skipped_oversize:
         _log(f"Finished. Sent {sent_count}, skipped {skipped_oversize} oversize file(s).")

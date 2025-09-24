@@ -2,7 +2,7 @@
 
 A Python CLI tool that scans a directory for media files and sends them to a Discord channel, preferring MP4+GIF pairs of the same media, and handling segmented videos and segmented pairs in nested folders. It can read the channel history and skip files that have already been uploaded (by filename), with a flag to bypass this filter.
 
-This tool complements the media generation workflow in `disdrop` by automating the final delivery step to Discord. See `disdrop` here: `[0-FoxHunt-0/disdrop]`(https://github.com/0-FoxHunt-0/disdrop/tree/master).
+This tool complements the media generation workflow in `disdrop` by automating the final delivery step to Discord. See disdrop here: [0-FoxHunt-0/disdrop](https://github.com/0-FoxHunt-0/disdrop/tree/master).
 
 ### Features
 
@@ -18,7 +18,7 @@ This tool complements the media generation workflow in `disdrop` by automating t
 - Python 3.9+
 - A Discord token (recommended: Bot token)
 
-### Install
+### Install (from source)
 
 1. Create a virtual environment and install deps
 
@@ -28,10 +28,26 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### Install (pip)
+
+When packaged, you can install via:
+
+```bash
+pip install autodismediasend
+```
+
+This provides a console entry point `discord-send`.
+
 ### Usage
 
 ```bash
 python main.py send "D:\\path\\to\\input" "https://discord.com/channels/<guild_id>/<channel_id>" --token <DISCORD_TOKEN>
+```
+
+Or via the installed command after `pip install`:
+
+```bash
+discord-send "D:\\path\\to\\input" "https://discord.com/channels/<guild_id>/<channel_id>" --token <DISCORD_TOKEN>
 ```
 
 Options:
@@ -44,7 +60,7 @@ Options:
 - `--request-timeout`: seconds for history requests (default: 30)
 - `--upload-timeout`: seconds for upload requests (default: 120)
 - `--delay-seconds`: delay between messages (default: 1.0)
-- `--max-file-mb`: size cap per file for sending (default: 8.0)
+- `--max-file-mb`: size cap per file for sending (default: 10.0)
 - `--skip-oversize/--no-skip-oversize`: skip files over cap (default: skip)
 
 #### Environment variables and .env
