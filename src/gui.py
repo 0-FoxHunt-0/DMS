@@ -971,34 +971,44 @@ def launch_gui() -> None:
                                             run_pane.log(f"[gui] using existing thread: {title_default}")
                                             return
                                         else:
-                                                # Generate unique name
+                                                # Prefer base name; number only on conflict
                                                 base_name = title_default
-                                                counter = 2
-                                                while True:
-                                                    test_name = f"{base_name} ({counter})"
-                                                    try:
-                                                        test_thread_id = client.find_existing_thread_by_name(
-                                                            ch_id, test_name, request_timeout=params["request_timeout"], guild_id=_g
-                                                        )
-                                                    except Exception as ex:
-                                                        run_pane.log(f"[gui] thread name test failed: {ex}")
-                                                        test_thread_id = None
-                                                    if not test_thread_id:
-                                                        break
-                                                    counter += 1
+                                                try:
+                                                    base_exists = client.find_existing_thread_by_name(
+                                                        ch_id, base_name, request_timeout=params["request_timeout"], guild_id=_g
+                                                    ) is not None
+                                                except Exception as ex:
+                                                    run_pane.log(f"[gui] base name check failed: {ex}")
+                                                    base_exists = False
+                                                suggestion = base_name
+                                                if base_exists:
+                                                    counter = 2
+                                                    while True:
+                                                        test_name = f"{base_name} ({counter})"
+                                                        try:
+                                                            test_thread_id = client.find_existing_thread_by_name(
+                                                                ch_id, test_name, request_timeout=params["request_timeout"], guild_id=_g
+                                                            )
+                                                        except Exception as ex:
+                                                            run_pane.log(f"[gui] thread name test failed: {ex}")
+                                                            test_thread_id = None
+                                                        if not test_thread_id:
+                                                            suggestion = test_name
+                                                            break
+                                                        counter += 1
 
                                                 # Ask for new name
                                                 new_title = simpledialog.askstring(
                                                     "New thread title",
-                                                    f'Enter new thread title for folder "{root_dir.name}" (suggested: "{test_name}"):',
-                                                    initialvalue=test_name,
+                                                    f'Enter new thread title for folder "{root_dir.name}" (suggested: "{suggestion}"):',
+                                                    initialvalue=suggestion,
                                                     parent=root_win,
                                                 )
                                                 if new_title is None:
                                                     title_holder[0] = ""
                                                     use_existing_holder[0] = None
                                                     return
-                                                final_title = new_title.strip() or test_name
+                                                final_title = new_title.strip() or suggestion
                                                 # Apply prepend text if enabled and user didn't already include it
                                                 if params.get("prepend_enabled", False) and params.get("prepend_text"):
                                                     prepend_text = params["prepend_text"]
