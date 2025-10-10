@@ -86,17 +86,17 @@ def send_media_job(
                     if str(t.get("name", "")).lower() == tag_l:
                         applied_tag_ids = [t.get("id")]
                         break
-            _log(f"[core] thread lookup: trying existing name='{title}' tag='{post_tag or ''}'")
+            _log(f"[core] thread lookup: trying existing title='{title}' tag='{post_tag or ''}'")
             try:
-                existing_id = client.find_existing_thread_by_name(channel_id, title, request_timeout=request_timeout)
+                existing_id = client.find_existing_thread_by_name(channel_id, title, request_timeout=request_timeout, guild_id=guild_id)
             except Exception as e:
                 existing_id = None
                 _log(f"[core] thread lookup error: {e}")
             if existing_id:
                 target_channel_id = existing_id
-                _log(f"[core] using existing thread id={existing_id} name='{title}'")
+                _log(f"[core] using existing thread: id={existing_id} title='{title}'")
             else:
-                _log(f"Creating new post in forum/media channel: title='{title}' tag='{post_tag or ''}'")
+                _log(f"[core] creating new thread: title='{title}' tag='{post_tag or ''}'")
                 new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
                 if not new_thread_id:
                     raise RuntimeError("Failed to create post thread")
@@ -159,6 +159,7 @@ def send_media_job(
             pass
         scan = scan.filter_against_filenames(existing)
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
+    _log(f"[core] uploads target channel/thread id={target_channel_id}")
 
     # Determine selected media categories
     selected = set((mt or '').strip().lower() for mt in (media_types or []))

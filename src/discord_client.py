@@ -272,13 +272,13 @@ class DiscordClient:
             return None
         return None
 
-    def find_existing_thread_by_name(self, channel_id: str, thread_name: str, request_timeout: float = 30.0) -> Optional[str]:
+    def find_existing_thread_by_name(self, channel_id: str, thread_name: str, request_timeout: float = 30.0, guild_id: Optional[str] = None) -> Optional[str]:
         """Find an existing thread by name in a forum channel. Returns thread ID if found, None otherwise.
 
         Searches active threads first, then falls back to archived public (and private, best-effort).
         """
         logger = logging.getLogger(__name__)
-        logger.info(f"[threads] lookup start: channel={channel_id} name='{thread_name}'")
+        logger.info(f"[threads] lookup start: channel={channel_id} title='{thread_name}'")
 
         def _match_name(threads: list, name: str) -> Optional[str]:
             try:
@@ -299,67 +299,101 @@ class DiscordClient:
             resp = self._request_with_retries("GET", url, timeout=request_timeout)
             if resp is not None and (200 <= resp.status_code < 300):
                 data = resp.json()
-                logger.info(f"[threads] active threads count={len(data.get('threads', [])) if isinstance(data, dict) else 'n/a'}")
+                logger.info(f"[threads] active: count={len(data.get('threads', [])) if isinstance(data, dict) else 'n/a'}")
                 tid = _match_name(data.get("threads", []), thread_name)
                 if tid:
                     return tid
-        except Exception:
-            pass
-
-        # Archived public threads (first page)
-        try:
-            url = f"{DISCORD_API}/channels/{channel_id}/threads/archived/public"
-            resp = self._request_with_retries("GET", url, params={"limit": 100}, timeout=request_timeout)
-            if resp is not None and (200 <= resp.status_code < 300):
-                data = resp.json() if hasattr(resp, 'json') else {}
-                threads = data.get("threads") if isinstance(data, dict) else (data or [])
+            else:
                 try:
-                    logger.info(f"[threads] archived public count={len(threads) if isinstance(threads, list) else 'n/a'}")
+                    logger.info(f"[threads] active threads request not OK: status={getattr(resp,'status_code',None)}")
                 except Exception:
                     pass
-                tid = _match_name(threads or [], thread_name)
-                if tid:
-                    return tid
         except Exception:
             pass
 
-        # Archived private threads (joined by current user) - best effort
-        try:
-            url = f"{DISCORD_API}/channels/{channel_id}/users/@me/threads/archived/private"
-            resp = self._request_with_retries("GET", url, params={"limit": 100}, timeout=request_timeout)
-            if resp is not None and (200 <= resp.status_code < 300):
-                data = resp.json() if hasattr(resp, 'json') else {}
-                threads = data.get("threads") if isinstance(data, dict) else (data or [])
-                try:
-                    logger.info(f"[threads] archived private count={len(threads) if isinstance(threads, list) else 'n/a'}")
-                except Exception:
-                    pass
-                tid = _match_name(threads or [], thread_name)
-                if tid:
-                    return tid
-        except Exception:
-            pass
+        # Fallback: guild-level active threads, filter by parent_id
+        if guild_id and guild_id != "@me":
+            try:
+                url = f"{DISCORD_API}/guilds/{guild_id}/threads/active"
+                resp = self._request_with_retries("GET", url, timeout=request_timeout)
+                if resp is not None and (200 <= resp.status_code < 300):
+                    data = resp.json() if hasattr(resp, 'json') else {}
+                    threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                    logger.info(f"[threads] guild active: count={len(threads) if isinstance(threads, list) else 'n/a'}")
+                    try:
+                        for th in threads or []:
+                            if not isinstance(th, dict):
+                                continue
+                            if str(th.get("parent_id")) != str(channel_id):
+                                continue
+                            if (th.get("name", "").strip().lower()) == (thread_name or "").strip().lower():
+                                return th.get("id")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        logger.info(f"[threads] guild active request not OK: status={getattr(resp,'status_code',None)}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
-        # Fallback: paginate archived public beyond first page (best-effort)
+        # Archived public threads (paginate by archive timestamp)
         try:
             url = f"{DISCORD_API}/channels/{channel_id}/threads/archived/public"
-            before: Optional[str] = None
-            for _ in range(10):
+            before_ts: Optional[str] = None
+            for page in range(30):
                 params = {"limit": 100}
-                if before:
-                    params["before"] = before
+                if before_ts:
+                    params["before"] = before_ts
                 resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
                 if resp is None or not (200 <= resp.status_code < 300):
                     break
                 data = resp.json() if hasattr(resp, 'json') else {}
                 threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                logger.info(f"[threads] archived public: page={page+1} count={len(threads) if isinstance(threads, list) else 'n/a'} before={before_ts}")
                 tid = _match_name(threads or [], thread_name)
                 if tid:
                     return tid
-                # Prepare next page cursor if available
+                # Set before cursor to oldest archive timestamp on this page
                 try:
                     if isinstance(threads, list) and threads:
-                        before = threads[-1].get("id")
+                        last = threads[-1]
+                        meta = last.get("thread_metadata", {}) if isinstance(last, dict) else {}
+                        before_ts = meta.get("archive_timestamp") or None
+                        if not before_ts:
+                            break
+                    else:
+                        break
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+        # Archived private threads (paginate by archive timestamp) - best effort
+        try:
+            url = f"{DISCORD_API}/channels/{channel_id}/users/@me/threads/archived/private"
+            before_ts: Optional[str] = None
+            for page in range(30):
+                params = {"limit": 100}
+                if before_ts:
+                    params["before"] = before_ts
+                resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
+                if resp is None or not (200 <= resp.status_code < 300):
+                    break
+                data = resp.json() if hasattr(resp, 'json') else {}
+                threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                logger.info(f"[threads] archived private: page={page+1} count={len(threads) if isinstance(threads, list) else 'n/a'} before={before_ts}")
+                tid = _match_name(threads or [], thread_name)
+                if tid:
+                    return tid
+                try:
+                    if isinstance(threads, list) and threads:
+                        last = threads[-1]
+                        meta = last.get("thread_metadata", {}) if isinstance(last, dict) else {}
+                        before_ts = meta.get("archive_timestamp") or None
+                        if not before_ts:
+                            break
                     else:
                         break
                 except Exception:

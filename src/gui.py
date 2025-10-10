@@ -341,6 +341,7 @@ class RunPane(ttk.Frame):
         self._base_bg = None
         self._num_cols = 1
         self._min_panel_width = 420  # px threshold for adding another column
+        self._global_row = 1000  # rolling row index for global messages
 
         # Recalculate layout when the canvas width changes
         self._canvas.bind("<Configure>", self._on_canvas_resize)
@@ -390,8 +391,8 @@ class RunPane(ttk.Frame):
     def _append_global(self, line: str) -> None:
         lbl = ttk.Label(self._container, text=line)
         # Place global messages at bottom spanning all columns
-        bottom_row = (len(self._job_items) // max(1, self._num_cols)) + 1000
-        lbl.grid(row=bottom_row, column=0, columnspan=self._num_cols, sticky="w")
+        lbl.grid(row=self._global_row, column=0, columnspan=self._num_cols, sticky="w")
+        self._global_row += 1
 
     def log_to(self, item: dict, line: str) -> None:
         if threading.current_thread() is self._main_thread:
@@ -431,6 +432,8 @@ class RunPane(ttk.Frame):
                     child.destroy()
                 except Exception:
                     pass
+        # Reset global row counter
+        self._global_row = 1000
 
     def _apply_column_weights(self) -> None:
         # Give weight to active columns so frames expand evenly
@@ -593,6 +596,37 @@ def _apply_theme(root: tk.Tk, run_pane: RunPane, mode: str) -> None:
 
 def launch_gui() -> None:
     load_env()
+    # Setup logging to ./logs like the CLI does
+    try:
+        import logging as _logging
+        from datetime import datetime as _dt
+        logs_dir = Path("logs")
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        log_path = logs_dir / f"run_{_dt.now().strftime('%Y%m%d_%H%M%S')}.log"
+        root = _logging.getLogger()
+        root.setLevel(_logging.INFO)
+        for h in list(root.handlers):
+            root.removeHandler(h)
+        fh = _logging.FileHandler(str(log_path), encoding="utf-8")
+        fmt = _logging.Formatter(fmt="%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+        # Keep last 5 logs
+        try:
+            log_files = list(logs_dir.glob("run_*.log"))
+            log_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in log_files[5:]:
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
     root = tk.Tk()
     root.title("AutoDisMediaSend")
     root.minsize(900, 600)
@@ -824,9 +858,9 @@ def launch_gui() -> None:
 
                                         # Check if a thread with this name already exists
                                         try:
-                                            run_pane.log("[gui] checking for existing thread by name...")
+                                            run_pane.log("[gui] checking for existing thread...")
                                             existing_thread_id = client.find_existing_thread_by_name(
-                                                ch_id, title_default, request_timeout=params["request_timeout"]
+                                                ch_id, title_default, request_timeout=params["request_timeout"], guild_id=_g
                                             )
                                         except Exception as ex:
                                             run_pane.log(f"[gui] existing-thread lookup failed: {ex}")
@@ -835,25 +869,12 @@ def launch_gui() -> None:
                                         # Resolve a root window reference once for parenting dialogs
                                         root_win = tk._default_root
                                         if existing_thread_id:
-                                            # Thread exists, ask user what to do
-                                            choice = messagebox.askyesnocancel(
-                                                "Thread exists",
-                                                f'A thread named "{title_default}" already exists.\n\n'
-                                                "Do you want to upload to the existing thread?\n\n"
-                                                "Yes: Upload to existing thread\n"
-                                                "No: Create new thread with different name\n"
-                                                "Cancel: Cancel operation",
-                                                parent=root_win
-                                            )
-
-                                            if choice is None:  # Cancel
-                                                title_holder[0] = ""
-                                                use_existing_holder[0] = None
-                                            elif choice:  # Yes - use existing
-                                                title_holder[0] = title_default
-                                                use_existing_holder[0] = existing_thread_id
-                                                return  # short-circuit: no need to ask for a new title
-                                            else:  # No - create new thread
+                                            # Auto-use existing thread without further prompts
+                                            title_holder[0] = title_default
+                                            use_existing_holder[0] = existing_thread_id
+                                            run_pane.log(f"[gui] using existing thread: {title_default}")
+                                            return
+                                        else:
                                                 # Generate unique name
                                                 base_name = title_default
                                                 counter = 2
@@ -861,7 +882,7 @@ def launch_gui() -> None:
                                                     test_name = f"{base_name} ({counter})"
                                                     try:
                                                         test_thread_id = client.find_existing_thread_by_name(
-                                                            ch_id, test_name, request_timeout=params["request_timeout"]
+                                                            ch_id, test_name, request_timeout=params["request_timeout"], guild_id=_g
                                                         )
                                                     except Exception as ex:
                                                         run_pane.log(f"[gui] thread name test failed: {ex}")
@@ -873,34 +894,24 @@ def launch_gui() -> None:
                                                 # Ask for new name
                                                 new_title = simpledialog.askstring(
                                                     "New thread title",
-                                                    f'Enter new thread title (suggested: "{test_name}"):',
+                                                    f'Enter new thread title for folder "{root_dir.name}" (suggested: "{test_name}"):',
                                                     initialvalue=test_name,
                                                     parent=root_win,
                                                 )
-                                                final_title = (new_title or "").strip() or test_name
+                                                if new_title is None:
+                                                    title_holder[0] = ""
+                                                    use_existing_holder[0] = None
+                                                    return
+                                                final_title = new_title.strip() or test_name
                                                 # Apply prepend text if enabled and user didn't already include it
                                                 if params.get("prepend_enabled", False) and params.get("prepend_text"):
                                                     prepend_text = params["prepend_text"]
                                                     if not final_title.startswith(prepend_text):
                                                         final_title = f"{prepend_text} {final_title}"
+                                                run_pane.log(f"[gui] creating new thread: {final_title}")
                                                 title_holder[0] = final_title
                                                 use_existing_holder[0] = None
-                                        else:
-                                            # No existing thread, just ask for title
-                                            t = simpledialog.askstring(
-                                                "Thread title",
-                                                "Enter thread title:",
-                                                initialvalue=title_default,
-                                                parent=root_win,
-                                            )
-                                            final_title = (t or "").strip() or title_default
-                                            # Apply prepend text if enabled and user didn't already include it
-                                            if params.get("prepend_enabled", False) and params.get("prepend_text"):
-                                                prepend_text = params["prepend_text"]
-                                                if not final_title.startswith(prepend_text):
-                                                    final_title = f"{prepend_text} {final_title}"
-                                            title_holder[0] = final_title
-                                            use_existing_holder[0] = None
+                                        
 
                                     except Exception as e:
                                         # Fallback to default on error
@@ -931,7 +942,7 @@ def launch_gui() -> None:
                                         run_pane.log(f"Using existing thread: {title_holder[0]}")
                                 else:
                                     # Cancelled or failed
-                                    run_pane.log("Thread creation cancelled")
+                                    run_pane.log("Thread creation cancelled.")
                                     run_button.config(state="normal")
                                     scram_button.config(state="disabled")
                                     return
