@@ -64,6 +64,5 @@ ehthumbs.db
 
 # Project specific
 logs/
-.adms_gui.json
-.adms_cache/
 *.log
+gui_settings.json
