@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from .config import load_env, set_env_var, CONFIG_DIR
+from .config import load_env, set_env_var, GUI_SETTINGS_PATH as CONFIG_PATH, ensure_config_location
 from .logging_utils import init_run_logging, prune_old_runs, sanitize_settings, format_kv, start_thread_log, sanitize_for_filename
 from .gui_modes import ManualModeView, AutoModeView
 from .core import send_media_job
@@ -488,7 +488,7 @@ def _to_int(s: str, default: int) -> int:
         return default
 
 
-CONFIG_PATH = CONFIG_DIR / "@.gui_settings.json"
+CONFIG_PATH = CONFIG_PATH
 
 
 def _load_config() -> dict:
@@ -597,6 +597,11 @@ def _apply_theme(root: tk.Tk, run_pane: RunPane, mode: str) -> None:
 
 def launch_gui() -> None:
     load_env()
+    # Ensure config directory is ready and files are migrated if needed
+    try:
+        ensure_config_location()
+    except Exception:
+        pass
     # Initialize per-run logging directory and root log
     try:
         run_dir, run_id, root_log = init_run_logging(base_dir=Path("logs"))
@@ -858,7 +863,7 @@ def launch_gui() -> None:
                                             root_win = tk._default_root
                                             new_title = simpledialog.askstring(
                                                 "New thread title",
-                                                f'Enter new thread title for "{path_to_send.name}" (suggested: "{test_name}"):',
+                                                f'Enter new thread title for "{path_to_send.name}" (suggested: "{test_name}"): ',
                                                 initialvalue=test_name,
                                                 parent=root_win,
                                             )
