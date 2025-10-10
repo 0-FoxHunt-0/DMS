@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Optional, Tuple, List
@@ -206,7 +207,64 @@ def send_media_job(
         except Exception:
             pass
 
+        # Diagnostics: measure how many planned filenames would match dedupe set
+        try:
+            def _strip_trailing_brackets_from_stem(stem: str) -> str:
+                s = stem
+                try:
+                    while True:
+                        new_s = re.sub(r"\s*\[[^\]]+\]\s*$", "", s)
+                        if new_s == s:
+                            break
+                        s = new_s
+                except Exception:
+                    return stem
+                return s
+
+            def _variants(name: str) -> List[str]:
+                name_l = (name or "").lower()
+                try:
+                    dot = name_l.rfind('.')
+                    if dot <= 0:
+                        base = name_l
+                        ext = ""
+                    else:
+                        base = name_l[:dot]
+                        ext = name_l[dot:]
+                    stripped = _strip_trailing_brackets_from_stem(base) + ext
+                    if stripped != name_l:
+                        return [name_l, stripped]
+                    return [name_l]
+                except Exception:
+                    return [name_l]
+
+            # Build the set of candidate names from the scan
+            planned_names: List[str] = []
+            for pair in scan.pairs:
+                planned_names.append(pair.mp4_path.name)
+                planned_names.append(pair.gif_path.name)
+            for single in scan.singles:
+                planned_names.append(single.path.name)
+
+            planned_variants: set[str] = set()
+            for n in planned_names:
+                for v in _variants(n):
+                    planned_variants.add(v)
+            hits = len(planned_variants & set(merged_existing))
+            _log(f"Dedupe pre-filter: {hits} of {len(planned_names)} filename(s) match local+remote")
+        except Exception:
+            pass
+
+        # Apply filter
+        scan_before = scan
         scan = scan.filter_against_filenames(merged_existing)
+        try:
+            before_count = len(scan_before.pairs) * 2 + len(scan_before.singles)
+            after_count = len(scan.pairs) * 2 + len(scan.singles)
+            removed = max(0, before_count - after_count)
+            _log(f"Dedupe post-filter: removed {removed} attachment(s); remaining {after_count}")
+        except Exception:
+            pass
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
     _log(f"[core] uploads target channel/thread id={target_channel_id}")
 
