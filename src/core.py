@@ -10,7 +10,7 @@ from queue import Queue, Empty
 from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
 from .scanner import scan_media
-from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS
+from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
 
 
 def send_media_job(
@@ -42,6 +42,7 @@ def send_media_job(
     prepend_text: str = "",
     media_types: Optional[List[str]] = None,
     ignore_segmentation: bool = False,
+    only_root_level: bool = False,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -160,6 +161,18 @@ def send_media_job(
         scan = scan.filter_against_filenames(existing)
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
     _log(f"[core] uploads target channel/thread id={target_channel_id}")
+
+    # Optional filter: restrict to root-level files only (exclude subfolders)
+    if only_root_level:
+        def _is_root(root_key: str) -> bool:
+            try:
+                return (root_key.split("/", 1)[0] == ".")
+            except Exception:
+                return False
+        scan = ScanResult(
+            pairs=[p for p in scan.pairs if _is_root(p.root_key)],
+            singles=[s for s in scan.singles if _is_root(s.root_key)],
+        )
 
     # Determine selected media categories
     selected = set((mt or '').strip().lower() for mt in (media_types or []))

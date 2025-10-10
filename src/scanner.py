@@ -165,3 +165,81 @@ def list_top_level_media_subdirs(root_dir: Path) -> List[Path]:
     return subdirs
 
 
+def has_root_level_media(root_dir: Path) -> bool:
+    """Return True if the root directory contains media files directly (excluding subfolders).
+
+    Uses scan_media and checks for any items whose root_key has a dir component of ".".
+    """
+    result = scan_media(root_dir)
+    def _is_root(root_key: str) -> bool:
+        try:
+            return (root_key.split("/", 1)[0] == ".")
+        except Exception:
+            return False
+    for p in result.pairs:
+        if _is_root(p.root_key):
+            return True
+    for s in result.singles:
+        if _is_root(s.root_key):
+            return True
+    return False
+
+
+def _infer_segment_base_from_dir(dir_path: Path) -> Optional[str]:
+    """Infer a common segmented base name from filenames in a directory.
+
+    If a strong majority of media stems match known segment patterns and share the
+    same normalized root, return that root; otherwise None.
+    """
+    try:
+        stems: List[str] = []
+        for p in dir_path.iterdir():
+            if p.is_file() and p.suffix.lower() in MEDIA_EXTS:
+                stems.append(p.stem)
+        if not stems:
+            return None
+        bases: List[str] = []
+        segmented = 0
+        for s in stems:
+            root, seg = _normalize_name(s)
+            if seg is not None:
+                segmented += 1
+                bases.append(root.lower())
+        if not segmented:
+            return None
+        # Majority threshold: at least 70% segmented and share the same base
+        ratio = segmented / max(1, len(stems))
+        if ratio < 0.7:
+            return None
+        # Find dominant base
+        from collections import Counter
+        c = Counter(bases)
+        base, count = c.most_common(1)[0]
+        if count / max(1, segmented) >= 0.7:
+            return base
+    except Exception:
+        return None
+    return None
+
+
+def suggest_thread_title_for_subdir(dir_path: Path) -> str:
+    """Suggest a human-friendly thread title for a subdirectory.
+
+    Rules:
+    - If the directory name ends with "_segments", strip that suffix.
+    - Else, if a common segmented base can be inferred from contents, use it.
+    - Otherwise, use the directory name as-is.
+    """
+    name = dir_path.name
+    name_l = name.lower()
+    try:
+        if name_l.endswith("_segments") and len(name) > len("_segments"):
+            return name[: -len("_segments")]
+        inferred = _infer_segment_base_from_dir(dir_path)
+        if inferred:
+            return inferred
+    except Exception:
+        pass
+    return name
+
+

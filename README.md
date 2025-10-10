@@ -62,6 +62,7 @@ Options:
 - `--delay-seconds`: delay between messages (default: 1.0)
 - `--max-file-mb`: size cap per file for sending (default: 10.0)
 - `--skip-oversize/--no-skip-oversize`: skip files over cap (default: skip)
+- `--split-by-subfolders`: when posting to Forum/Media without a thread id, split uploads into one thread for root files (if any) and one per top-level subfolder; each group checks for an existing thread by name before prompting/creating
 
 #### Environment variables and .env
 
@@ -102,7 +103,7 @@ Notes:
 
 ```
 
-### How pairing and segmentation works
+### How pairing, segmentation, and auto-splitting work
 
 - Files are scanned recursively. Extensions considered: `.mp4` and `.gif`.
 - Files are grouped by a normalized root name. Common segment suffixes are recognized (e.g., `_part1`, `-part02`, `_seg3`, `(1)`).
@@ -110,6 +111,7 @@ Notes:
   - If both MP4 and GIF exist with the same segment index, they are sent together in a single message.
   - If only one exists, it is sent as a single.
   - For non-segmented items, a single pair is sent if both formats exist; otherwise the single file is sent.
+- GUI Auto mode: if the destination is a Forum/Media channel and "Send as single thread" is unchecked, the app will create one job for root-level files (if present) and one per top-level subfolder. It checks for existing threads by name; if none is found, it suggests a title derived from the folder name, stripping `_segments` or inferring the common segmented base when applicable.
 
 ### Dedupe logic
 

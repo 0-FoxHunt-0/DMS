@@ -146,6 +146,7 @@ def send(
     segment_separators: bool = typer.Option(True, help="Send a separator message before and after each segmented group"),
     separator_text: str = typer.Option("----------------------------------------", help="Text used as the separator message"),
     ignore_segmentation: bool = typer.Option(False, help="Treat all files as non-segmented: no separators, no grouping"),
+    split_by_subfolders: bool = typer.Option(False, help="When posting to Forum/Media without thread id, split into one thread for root files and one per top-level subfolder"),
 ) -> None:
     if log_file is None:
         # Write logs to a local ./logs directory by default
@@ -188,7 +189,95 @@ def send(
     # If a thread URL was provided, prefer sending into that thread
     target_channel_id = channel_id
     if is_forum_like and thread_id is None:
-        # Need to create thread (post)
+        if split_by_subfolders:
+            # Multi-job flow: root files and per-subfolder threads
+            from .scanner import list_top_level_media_subdirs, has_root_level_media, suggest_thread_title_for_subdir
+            subdirs = list_top_level_media_subdirs(input_dir)
+            root_has = has_root_level_media(input_dir)
+            groups: list[tuple[str, Path, bool]] = []  # (title_suggestion, path, only_root_level)
+            if root_has:
+                groups.append((input_dir.name, input_dir, True))
+            for p in subdirs:
+                groups.append((suggest_thread_title_for_subdir(p), p, False))
+            if not groups:
+                rprint("[yellow]No media found in root or subfolders.[/yellow]")
+                return
+            rprint(f"[bold]Splitting into {len(groups)} thread(s):[/bold]")
+            for idx, (title_suggestion, path_to_send, only_root) in enumerate(groups, start=1):
+                # Determine title, check for existing, and potentially create thread
+                job_title = post_title or title_suggestion
+                # Probe existing thread
+                try:
+                    existing_thread_id = client.find_existing_thread_by_name(channel_id, job_title, request_timeout=request_timeout, guild_id=guild_id)
+                except Exception:
+                    existing_thread_id = None
+                if existing_thread_id:
+                    group_url = f"{channel_url}/threads/{existing_thread_id}"
+                    rprint(f"[{idx}] Using existing thread: {job_title}")
+                else:
+                    # Ensure uniqueness by probing " (n)" variants, then prompt
+                    base_name = job_title
+                    counter = 2
+                    while True:
+                        test_name = f"{base_name} ({counter})"
+                        try:
+                            test_id = client.find_existing_thread_by_name(channel_id, test_name, request_timeout=request_timeout, guild_id=guild_id)
+                        except Exception:
+                            test_id = None
+                        if not test_id:
+                            break
+                        counter += 1
+                    final_title = typer.prompt(f"[{idx}] Enter thread title for '{path_to_send.name}'", default=test_name)
+                    # Create thread now
+                    applied_tag_ids = None
+                    if ch and post_tag:
+                        tag_l = (post_tag or "").strip().lower()
+                        for t in ch.get("available_tags", []):
+                            if str(t.get("name", "")).lower() == tag_l:
+                                applied_tag_ids = [t.get("id")]
+                                break
+                        if not applied_tag_ids and post_tag:
+                            rprint(f"[yellow]Warning: Tag '{post_tag}' not found in channel; creating without tags.[/yellow]")
+                    new_tid = client.start_forum_post(channel_id, final_title, content=final_title, applied_tag_ids=applied_tag_ids)
+                    if not new_tid:
+                        rprint(f"[red]Failed to create post thread for group {idx}.[/red]")
+                        continue
+                    group_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_tid}"
+                    rprint(f"[{idx}] Created thread: {final_title}")
+
+                # Print plan and execute for this group
+                def _on_log(msg: str) -> None:
+                    try:
+                        rprint(msg)
+                    except Exception:
+                        pass
+                result = send_media_job(
+                    input_dir=path_to_send,
+                    channel_url=group_url,
+                    token=token,  # type: ignore[arg-type]
+                    token_type=token_type,
+                    post_title=None,  # already used or existing
+                    post_tag=post_tag,
+                    relay_from=None,
+                    relay_download_dir=Path(".adms_cache"),
+                    ignore_dedupe=ignore_dedupe,
+                    dry_run=dry_run,
+                    history_limit=history_limit,
+                    request_timeout=request_timeout,
+                    upload_timeout=upload_timeout,
+                    delay_seconds=delay_seconds,
+                    max_file_mb=max_file_mb,
+                    skip_oversize=skip_oversize,
+                    concurrency=concurrency,
+                    segment_separators=segment_separators,
+                    separator_text=separator_text,
+                    ignore_segmentation=ignore_segmentation,
+                    on_log=_on_log,
+                    only_root_level=only_root,
+                )
+                rprint(f"[green]{result}[/green]")
+            return
+        # Single-thread flow (back-compat)
         title = post_title or typer.prompt("Enter post title for Forum/Media channel")
         applied_tag_ids = None
         if ch and post_tag:

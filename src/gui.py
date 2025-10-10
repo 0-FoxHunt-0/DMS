@@ -780,7 +780,7 @@ def launch_gui() -> None:
             per_job_items = []
             # Auto mode flow
             if auto_mode_var.get():
-                from .scanner import list_top_level_media_subdirs
+                from .scanner import list_top_level_media_subdirs, has_root_level_media, suggest_thread_title_for_subdir
                 root_dir, auto_url = auto_view.get_values()
                 if not root_dir or not auto_url:
                     run_pane.log_global("Auto mode: missing root directory or upload URL")
@@ -795,32 +795,106 @@ def launch_gui() -> None:
                         is_forum_like = ch_type in (15, 16) if ch is not None else False
                         send_as_one = auto_view.get_send_as_one()
                         if (is_forum_like and th_id is None) and not send_as_one:
+                            # Determine groups: root-only files and subfolders with media
                             subdirs = list_top_level_media_subdirs(root_dir)
-                            if not subdirs:
-                                run_pane.log_global("Auto mode: no media subfolders found")
-                            max_workers = max(1, min(6, len(subdirs)))
-                            run_pane.log_global(f"Starting {len(subdirs)} auto job(s)...")
+                            root_has = has_root_level_media(root_dir)
+                            groups: list[tuple[str, Path, bool]] = []  # (title_suggestion, path, only_root_level)
+                            if root_has:
+                                # Root-only group uses root_dir, flagged to filter at core layer
+                                groups.append((root_dir.name, root_dir, True))
+                            for p in subdirs:
+                                groups.append((suggest_thread_title_for_subdir(p), p, False))
+
+                            if not groups:
+                                run_pane.log_global("Auto mode: no media found in root or subfolders")
+                            max_workers = max(1, min(6, len(groups)))
+                            run_pane.log_global(f"Starting {len(groups)} auto job(s)...")
                             with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                                for idx, p in enumerate(subdirs, start=1):
+                                for idx, (title_suggestion, path_to_send, only_root) in enumerate(groups, start=1):
                                     cancel_event = threading.Event()
                                     current_cancel_events.append(cancel_event)
                                     def make_stop(ev: threading.Event):
                                         return lambda: ev.set()
-                                    item = run_pane.add_job_panel(f"Auto {idx}: {p.name} -> {auto_url}", on_stop=make_stop(cancel_event))
-                                    run_pane.log_to(item, f"Queued: {p} -> {auto_url}")
+                                    item = run_pane.add_job_panel(f"Auto {idx}: {path_to_send.name} -> {auto_url}", on_stop=make_stop(cancel_event))
+                                    run_pane.log_to(item, f"Queued: {path_to_send} -> {auto_url}")
                                     per_job_items.append(item)
                                     job_params = dict(params)
-                                    job_title = p.name
-                                    # Apply prepend text if enabled
+
+                                    # Determine default job title with prepend if configured
+                                    job_title = title_suggestion
                                     if job_params.get("prepend_enabled", False) and job_params.get("prepend_text"):
                                         job_title = f"{job_params['prepend_text']} {job_title}"
-                                    job_params["post_title"] = job_title
+
+                                    # Check for existing thread with this name
+                                    final_title = job_title
+                                    use_existing_tid: Optional[str] = None
+                                    try:
+                                        run_pane.log("[gui] checking for existing thread...")
+                                        existing_thread_id = client.find_existing_thread_by_name(
+                                            ch_id, job_title, request_timeout=params["request_timeout"], guild_id=_g
+                                        )
+                                    except Exception as ex:
+                                        run_pane.log(f"[gui] existing-thread lookup failed: {ex}")
+                                        existing_thread_id = None
+
+                                    if existing_thread_id:
+                                        use_existing_tid = existing_thread_id
+                                        run_pane.log(f"[gui] using existing thread: {job_title}")
+                                    else:
+                                        # Propose a unique name and prompt the user
+                                        try:
+                                            from tkinter import simpledialog
+                                            import tkinter as tk
+                                            base_name = job_title
+                                            counter = 2
+                                            while True:
+                                                test_name = f"{base_name} ({counter})"
+                                                try:
+                                                    test_thread_id = client.find_existing_thread_by_name(
+                                                        ch_id, test_name, request_timeout=params["request_timeout"], guild_id=_g
+                                                    )
+                                                except Exception as ex:
+                                                    run_pane.log(f"[gui] thread name test failed: {ex}")
+                                                    test_thread_id = None
+                                                if not test_thread_id:
+                                                    break
+                                                counter += 1
+                                            root_win = tk._default_root
+                                            new_title = simpledialog.askstring(
+                                                "New thread title",
+                                                f'Enter new thread title for "{path_to_send.name}" (suggested: "{test_name}"):',
+                                                initialvalue=test_name,
+                                                parent=root_win,
+                                            )
+                                            if new_title is None:
+                                                # cancelled; skip this job
+                                                run_pane.log_to(item, "Thread creation cancelled for this group; skipping.")
+                                                continue
+                                            final_title = new_title.strip() or test_name
+                                            if job_params.get("prepend_enabled", False) and job_params.get("prepend_text"):
+                                                prepend_text = job_params["prepend_text"]
+                                                if not final_title.startswith(prepend_text):
+                                                    final_title = f"{prepend_text} {final_title}"
+                                        except Exception as e:
+                                            run_pane.log_to(item, f"Thread title prompt failed; using default: {e}")
+                                            final_title = job_title
+
+                                    # Set post_title unless we're using an existing thread (then modify URL)
+                                    if use_existing_tid:
+                                        group_url = f"{auto_url}/threads/{use_existing_tid}"
+                                    else:
+                                        group_url = auto_url
+                                        job_params["post_title"] = final_title
+
+                                    if only_root:
+                                        job_params["only_root_level"] = True
+
                                     def make_logger(itm: dict):
                                         return lambda msg: run_pane.log_to(itm, msg)
                                     futures.append(ex.submit(
                                         send_media_job,
-                                        input_dir=p,
-                                        channel_url=auto_url,
+                                        input_dir=path_to_send,
+                                        channel_url=group_url,
                                         **job_params,
                                         cancel_event=cancel_event,
                                         on_log=make_logger(item),
