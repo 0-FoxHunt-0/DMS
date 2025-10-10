@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import DefaultDict, Dict, Iterable, List, Optional, Set, Tuple
+import sys
 
 
 # Media type categories
@@ -93,12 +94,39 @@ def scan_media(root_dir: Path) -> ScanResult:
         rel_dir = p.parent.relative_to(root_dir).as_posix()
         dir_key = rel_dir or "."
         stem = p.stem
-        # Only treat numeric suffixes as segments when inside a "*_segments" directory
-        parent_name_l = p.parent.name.lower()
-        if parent_name_l.endswith("_segments"):
+
+        # For root directory files, check if this might be part of a segmentation
+        # by looking at all files in the root directory
+        if dir_key == ".":
+            parent_dir = root_dir
+        else:
+            parent_dir = p.parent
+
+        all_media_files = [f for f in parent_dir.iterdir() if f.is_file() and f.suffix.lower() in MEDIA_EXTS]
+
+        # Check if this directory contains segmented files (multiple files with same root + numeric suffixes)
+        stems_in_dir = [f.stem for f in all_media_files]
+        segmented_stems = []
+        for s in stems_in_dir:
+            root, seg_num = _normalize_name(s)
+            if seg_num is not None:
+                segmented_stems.append((root.lower(), seg_num))
+
+        # If we find segmented files in this directory, treat all files as potentially segmented
+        # Check if there are multiple files with the same root but different segment numbers
+        root_counts = {}
+        for root, seg_num in segmented_stems:
+            if root not in root_counts:
+                root_counts[root] = []
+            root_counts[root].append(seg_num)
+
+        should_check_segments = any(len(nums) > 1 for nums in root_counts.values())
+
+        if should_check_segments:
             root_name, seg_num = _normalize_name(stem)
         else:
             root_name, seg_num = stem, None
+
         key = (dir_key, root_name.lower(), seg_num)
         if key not in buckets:
             buckets[key] = {}
@@ -176,6 +204,18 @@ def has_root_level_media(root_dir: Path) -> bool:
             return (root_key.split("/", 1)[0] == ".")
         except Exception:
             return False
+
+    root_items = []
+    for p in result.pairs:
+        if _is_root(p.root_key):
+            root_items.append(f"pair: {p.root_key}")
+    for s in result.singles:
+        if _is_root(s.root_key):
+            root_items.append(f"single: {s.root_key}")
+
+    if root_items:
+        print(f"[DEBUG] Root level media found: {root_items}")
+
     for p in result.pairs:
         if _is_root(p.root_key):
             return True

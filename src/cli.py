@@ -201,9 +201,15 @@ def send(
                 pass
             groups: list[tuple[str, Path, bool]] = []  # (title_suggestion, path, only_root_level)
             if root_has:
-                groups.append((input_dir.name, input_dir, True))
+                root_title = input_dir.name
+                rprint(f"[cyan]CLI split: adding root group: '{root_title}'[/cyan]")
+                groups.append((root_title, input_dir, True))
+            else:
+                rprint(f"[cyan]CLI split: no root media detected[/cyan]")
             for p in subdirs:
-                groups.append((suggest_thread_title_for_subdir(p), p, False))
+                subdir_title = suggest_thread_title_for_subdir(p)
+                rprint(f"[cyan]CLI split: adding subdir group: '{subdir_title}' for '{p.name}'[/cyan]")
+                groups.append((subdir_title, p, False))
             if not groups:
                 rprint("[yellow]No media found in root or subfolders.[/yellow]")
                 return
