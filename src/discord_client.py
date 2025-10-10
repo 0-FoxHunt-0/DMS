@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -276,6 +277,9 @@ class DiscordClient:
 
         Searches active threads first, then falls back to archived public (and private, best-effort).
         """
+        logger = logging.getLogger(__name__)
+        logger.info(f"[threads] lookup start: channel={channel_id} name='{thread_name}'")
+
         def _match_name(threads: list, name: str) -> Optional[str]:
             try:
                 name_l = (name or "").strip().lower()
@@ -283,6 +287,7 @@ class DiscordClient:
                     if not isinstance(th, dict):
                         continue
                     if (th.get("name", "").strip().lower()) == name_l:
+                        logger.info(f"[threads] match found: id={th.get('id')} name='{th.get('name')}'")
                         return th.get("id")
             except Exception:
                 return None
@@ -294,6 +299,7 @@ class DiscordClient:
             resp = self._request_with_retries("GET", url, timeout=request_timeout)
             if resp is not None and (200 <= resp.status_code < 300):
                 data = resp.json()
+                logger.info(f"[threads] active threads count={len(data.get('threads', [])) if isinstance(data, dict) else 'n/a'}")
                 tid = _match_name(data.get("threads", []), thread_name)
                 if tid:
                     return tid
@@ -307,6 +313,10 @@ class DiscordClient:
             if resp is not None and (200 <= resp.status_code < 300):
                 data = resp.json() if hasattr(resp, 'json') else {}
                 threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                try:
+                    logger.info(f"[threads] archived public count={len(threads) if isinstance(threads, list) else 'n/a'}")
+                except Exception:
+                    pass
                 tid = _match_name(threads or [], thread_name)
                 if tid:
                     return tid
@@ -320,12 +330,17 @@ class DiscordClient:
             if resp is not None and (200 <= resp.status_code < 300):
                 data = resp.json() if hasattr(resp, 'json') else {}
                 threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                try:
+                    logger.info(f"[threads] archived private count={len(threads) if isinstance(threads, list) else 'n/a'}")
+                except Exception:
+                    pass
                 tid = _match_name(threads or [], thread_name)
                 if tid:
                     return tid
         except Exception:
             pass
 
+        logger.info("[threads] lookup end: not found")
         return None
 
     def _request_with_retries(self, method: str, url: str, max_retries: int = 5, timeout: float = 30.0, **kwargs):

@@ -65,6 +65,7 @@ def send_media_job(
     # If destination is forum/media channel and no thread id is provided, create a thread
     _log(f"Scanning '{input_dir}' and preparing destination...")
     try:
+        _log(f"[core] fetching channel info for {channel_id}")
         ch = client.get_channel(channel_id, request_timeout=request_timeout)
     except DiscordAuthError as e:
         _log(f"Authentication error: {e}")
@@ -85,20 +86,30 @@ def send_media_job(
                     if str(t.get("name", "")).lower() == tag_l:
                         applied_tag_ids = [t.get("id")]
                         break
-            _log(f"Creating new post in forum/media channel: title='{title}' tag='{post_tag or ''}'")
-            new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
-            if not new_thread_id:
-                raise RuntimeError("Failed to create post thread")
-            target_channel_id = new_thread_id
-            # Inform caller about the created thread so UI/clients can update URLs
+            _log(f"[core] thread lookup: trying existing name='{title}' tag='{post_tag or ''}'")
             try:
-                if on_thread_created is not None:
-                    # Prefer the compact /channels/<guild>/<channel>/<thread> form
-                    new_thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
-                    on_thread_created(new_thread_url)
-            except Exception:
-                # Never let callback issues break the flow
-                pass
+                existing_id = client.find_existing_thread_by_name(channel_id, title, request_timeout=request_timeout)
+            except Exception as e:
+                existing_id = None
+                _log(f"[core] thread lookup error: {e}")
+            if existing_id:
+                target_channel_id = existing_id
+                _log(f"[core] using existing thread id={existing_id} name='{title}'")
+            else:
+                _log(f"Creating new post in forum/media channel: title='{title}' tag='{post_tag or ''}'")
+                new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
+                if not new_thread_id:
+                    raise RuntimeError("Failed to create post thread")
+                target_channel_id = new_thread_id
+                # Inform caller about the created thread so UI/clients can update URLs
+                try:
+                    if on_thread_created is not None:
+                        # Prefer the compact /channels/<guild>/<channel>/<thread> form
+                        new_thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
+                        on_thread_created(new_thread_url)
+                except Exception:
+                    # Never let callback issues break the flow
+                    pass
     elif thread_id is not None:
         target_channel_id = thread_id
 

@@ -823,9 +823,14 @@ def launch_gui() -> None:
                                             title_default = f"{params['prepend_text']} {title_default}"
 
                                         # Check if a thread with this name already exists
-                                        existing_thread_id = client.find_existing_thread_by_name(
-                                            ch_id, title_default, request_timeout=params["request_timeout"]
-                                        )
+                                        try:
+                                            run_pane.log("[gui] checking for existing thread by name...")
+                                            existing_thread_id = client.find_existing_thread_by_name(
+                                                ch_id, title_default, request_timeout=params["request_timeout"]
+                                            )
+                                        except Exception as ex:
+                                            run_pane.log(f"[gui] existing-thread lookup failed: {ex}")
+                                            existing_thread_id = None
 
                                         # Resolve a root window reference once for parenting dialogs
                                         root_win = tk._default_root
@@ -853,9 +858,13 @@ def launch_gui() -> None:
                                                 counter = 2
                                                 while True:
                                                     test_name = f"{base_name} ({counter})"
-                                                    test_thread_id = client.find_existing_thread_by_name(
-                                                        ch_id, test_name, request_timeout=params["request_timeout"]
-                                                    )
+                                                    try:
+                                                        test_thread_id = client.find_existing_thread_by_name(
+                                                            ch_id, test_name, request_timeout=params["request_timeout"]
+                                                        )
+                                                    except Exception as ex:
+                                                        run_pane.log(f"[gui] thread name test failed: {ex}")
+                                                        test_thread_id = None
                                                     if not test_thread_id:
                                                         break
                                                     counter += 1
