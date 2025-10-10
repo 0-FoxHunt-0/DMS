@@ -54,6 +54,7 @@ def send_media_job(
     Returns a short human-readable result string.
     """
     current_logger: Optional[logging.Logger] = logger
+    dedupe_logger: Optional[logging.Logger] = None
 
     def _log(msg: str) -> None:
         # Always echo to UI if provided
@@ -76,6 +77,17 @@ def send_media_job(
     guild_id, channel_id, thread_id = client.parse_ids_from_url(channel_url)
     if channel_id is None:
         raise ValueError("Invalid channel URL. Expected https://discord.com/channels/<guild>/<channel>")
+
+    # Initialize dedicated dedupe logger under run directory
+    try:
+        if run_dir is not None:
+            dedupe_logger = start_thread_log(run_dir, "dedupe")
+            try:
+                dedupe_logger.info("[dedupe] logger initialized")
+            except Exception:
+                pass
+    except Exception:
+        dedupe_logger = None
 
     # If destination is forum/media channel and no thread id is provided, create a thread
     _log(f"Scanning '{input_dir}' and preparing destination...")
@@ -183,6 +195,9 @@ def send_media_job(
 
     _log("Scanning input directory for media...")
     scan = scan_media(input_dir)
+    # Track duplicates detected for end-of-run summary
+    duplicates_detected: List[str] = []
+
     if not ignore_dedupe:
         _log("Fetching recent filenames for dedupe...")
         try:
@@ -204,6 +219,8 @@ def send_media_job(
         # New: report the dedupe catalog size and local cache contribution
         try:
             _log(f"Dedupe catalog size: {len(merged_existing)} filename(s) (local+remote)")
+            if dedupe_logger is not None:
+                dedupe_logger.info(f"[dedupe] local={len(local_existing)} remote={len(remote_existing)} merged={len(merged_existing)}")
         except Exception:
             pass
 
@@ -250,8 +267,25 @@ def send_media_job(
             for n in planned_names:
                 for v in _variants(n):
                     planned_variants.add(v)
-            hits = len(planned_variants & set(merged_existing))
+            # Expand existing as well for a fair variant comparison
+            existing_variants: set[str] = set()
+            for n in merged_existing:
+                for v in _variants(n):
+                    existing_variants.add(v)
+            hits = len(planned_variants & existing_variants)
             _log(f"Dedupe pre-filter: {hits} of {len(planned_names)} filename(s) match local+remote")
+            # Record duplicate names (original basenames, unique)
+            dupe_set: set[str] = set()
+            for n in planned_names:
+                vs = _variants(n)
+                if any(v in existing_variants for v in vs):
+                    dupe_set.add(n)
+            duplicates_detected = sorted(dupe_set)
+            if dedupe_logger is not None:
+                try:
+                    dedupe_logger.info(f"[dedupe] planned={len(planned_names)} hits={len(duplicates_detected)}")
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -263,6 +297,11 @@ def send_media_job(
             after_count = len(scan.pairs) * 2 + len(scan.singles)
             removed = max(0, before_count - after_count)
             _log(f"Dedupe post-filter: removed {removed} attachment(s); remaining {after_count}")
+            if dedupe_logger is not None:
+                try:
+                    dedupe_logger.info(f"[dedupe] post-filter removed={removed} remaining={after_count}")
+                except Exception:
+                    pass
         except Exception:
             pass
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
@@ -532,6 +571,17 @@ def send_media_job(
             t.join()
         if worker_errors:
             return "Aborted: authentication failed (401/403)"
+
+    # Emit end-of-run dedupe summary to dedicated log file
+    try:
+        if dedupe_logger is not None and not ignore_dedupe:
+            dedupe_logger.info("[dedupe] summary start")
+            dedupe_logger.info(f"[dedupe] duplicates detected: count={len(duplicates_detected)}")
+            for name in duplicates_detected:
+                dedupe_logger.info(f"[dedupe] dup: {name}")
+            dedupe_logger.info("[dedupe] summary end")
+    except Exception:
+        pass
 
     if skipped_oversize:
         _log(f"Finished. Sent {sent_count}, skipped {skipped_oversize} oversize file(s).")
