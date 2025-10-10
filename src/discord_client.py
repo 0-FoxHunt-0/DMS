@@ -23,7 +23,12 @@ def _auth_header(token: str, token_type: str) -> str:
     return token
 
 
-_CDN_FILENAME_RE = re.compile(r"/([A-Za-z0-9_\-\.]+\.(?:mp4|gif))(?:\?|$)", re.IGNORECASE)
+# Match a CDN filename from a URL path segment. Allow any non-separator chars
+# and support common media extensions we handle elsewhere in the app.
+_CDN_FILENAME_RE = re.compile(
+    r"/([^/?#]+\.(?:mp4|gif|png|jpe?g|webp|mov|webm|mkv))(?:\?|$)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
