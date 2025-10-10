@@ -113,3 +113,38 @@ def scan_media(root_dir: Path) -> ScanResult:
     return ScanResult(pairs=pairs, singles=singles)
 
 
+def list_top_level_media_subdirs(root_dir: Path) -> List[Path]:
+    """Return immediate subdirectories of root_dir that contain media files.
+
+    Uses scan_media to detect media presence and derives the first-level
+    directory component from each item's root_key. The root (".") is ignored.
+    The returned order is stable by first appearance.
+    """
+    result = scan_media(root_dir)
+    seen: Set[str] = set()
+    ordered: List[str] = []
+
+    def _add_from_root_key(root_key: str) -> None:
+        # root_key format: "<dir_key>/<root_name>", where dir_key is "." for root
+        try:
+            dir_part = root_key.split("/", 1)[0]
+        except Exception:
+            dir_part = "."
+        if dir_part and dir_part != "." and dir_part not in seen:
+            seen.add(dir_part)
+            ordered.append(dir_part)
+
+    for p in result.pairs:
+        _add_from_root_key(p.root_key)
+    for s in result.singles:
+        _add_from_root_key(s.root_key)
+
+    subdirs: List[Path] = []
+    for name in ordered:
+        p = root_dir / name
+        # Only include existing directories; skip if removed between scan and listing
+        if p.exists() and p.is_dir():
+            subdirs.append(p)
+    return subdirs
+
+

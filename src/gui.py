@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from .config import load_env, set_env_var, CONFIG_DIR
+from .gui_modes import ManualModeView, AutoModeView
 from .core import send_media_job
 from .discord_client import DiscordClient
 
@@ -213,9 +214,19 @@ class AdvancedOptions(ttk.LabelFrame):
         relay_entry.grid(row=11, column=1, sticky="we")
         ttk.Button(self, text="Browse", command=self._browse_relay_dir).grid(row=11, column=2, sticky="w")
 
+        # Prepend option for auto mode thread names
+        self.prepend_enabled_var = tk.BooleanVar(value=False)
+        self.prepend_text_var = tk.StringVar(value="")
+        ttk.Label(self, text="Auto mode prepend:").grid(row=12, column=0, sticky="w")
+        prepend_frame = ttk.Frame(self)
+        prepend_frame.grid(row=12, column=1, columnspan=2, sticky="we", pady=2)
+        prepend_frame.columnconfigure(1, weight=1)
+        ttk.Checkbutton(prepend_frame, text="Enable", variable=self.prepend_enabled_var).grid(row=0, column=0, sticky="w")
+        ttk.Entry(prepend_frame, textvariable=self.prepend_text_var, width=24).grid(row=0, column=1, sticky="we", padx=(8, 0))
+
         # Per-job post overrides section (hidden until needed)
         self._per_job_frame = ttk.LabelFrame(self, text="Per-job post fields")
-        self._per_job_frame.grid(row=13, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        self._per_job_frame.grid(row=14, column=0, columnspan=3, sticky="we", pady=(8, 0))
         ttk.Label(self._per_job_frame, text="#").grid(row=0, column=0, sticky="w", padx=(4, 8))
         ttk.Label(self._per_job_frame, text="Title").grid(row=0, column=1, sticky="w")
         ttk.Label(self._per_job_frame, text="Tag").grid(row=0, column=2, sticky="w", padx=(8, 0))
@@ -566,14 +577,21 @@ def launch_gui() -> None:
     theme_btn = ttk.Button(top_bar, textvariable=theme_var, width=8, command=_toggle_theme)
     theme_btn.grid(row=0, column=1, sticky="w", padx=(6, 0))
 
-    # Single jobs list
+    # Mode toggle + views
     lists_frame = ttk.Frame(root)
     lists_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=10)
     root.columnconfigure(0, weight=1)
     root.rowconfigure(2, weight=1)
 
-    jobs_list = DynamicJobsList(lists_frame, title="Jobs")
-    jobs_list.grid(row=0, column=0, sticky="nsew")
+    # Auto mode toggle
+    auto_mode_var = tk.BooleanVar(value=False)
+    ttk.Checkbutton(top_bar, text="Auto mode", variable=auto_mode_var).grid(row=0, column=2, sticky="w", padx=(16, 0))
+
+    manual_view = ManualModeView(lists_frame)
+    manual_view.grid(row=0, column=0, sticky="nsew")
+    auto_view = AutoModeView(lists_frame)
+    auto_view.grid(row=0, column=0, sticky="nsew")
+    auto_view.grid_remove()
     lists_frame.columnconfigure(0, weight=1)
 
     # Advanced options
@@ -585,9 +603,9 @@ def launch_gui() -> None:
     run_pane.grid(row=3, column=0, sticky="nsew", padx=12, pady=(8, 12))
     root.rowconfigure(3, weight=1)
 
-    # Auto-manage per-job field grid visibility
+    # Auto-manage per-job field grid visibility (manual mode only)
     def _refresh_per_job_fields():
-        jobs = jobs_list.get_jobs()
+        jobs = manual_view.get_jobs()
         indices: List[int] = []
         for i, (_p, u) in enumerate(jobs, start=1):
             _g, _c, t = DiscordClient.parse_ids_from_url(u)
@@ -595,7 +613,19 @@ def launch_gui() -> None:
                 indices.append(i)
         adv.set_per_job_indices(indices)
 
-    jobs_list.set_on_change(_refresh_per_job_fields)
+    manual_view.set_on_change(_refresh_per_job_fields)
+
+    def _toggle_mode_ui():
+        if auto_mode_var.get():
+            manual_view.grid_remove()
+            adv.set_per_job_indices([])  # hide per-job overrides in auto mode
+            auto_view.grid()
+        else:
+            auto_view.grid_remove()
+            manual_view.grid()
+            _refresh_per_job_fields()
+
+    auto_mode_var.trace_add("write", lambda *_: _toggle_mode_ui())
 
     # Preload token from env if present
     env_token = _load_token_from_env()
@@ -631,10 +661,15 @@ def launch_gui() -> None:
             except Exception as e:
                 run_pane.log(f"Failed to save token: {e}")
 
-        all_jobs = jobs_list.get_jobs()
-        if not all_jobs:
-            messagebox.showwarning("No jobs", "Please add at least one (input dir, Discord URL) pair")
-            return
+        # Determine jobs based on mode
+        if auto_mode_var.get():
+            # Auto mode collects values later (flow below)
+            all_jobs = []
+        else:
+            all_jobs = manual_view.get_jobs()
+            if not all_jobs:
+                messagebox.showwarning("No jobs", "Please add at least one (input dir, Discord URL) pair")
+                return
 
         # Parse options
         params = dict(
@@ -653,15 +688,224 @@ def launch_gui() -> None:
             max_file_mb=_to_float(adv.max_file_mb_var.get(), 10.0),
             skip_oversize=adv.skip_oversize_var.get(),
             concurrency=_to_int(adv.concurrency_var.get(), 1),
+            prepend_enabled=adv.prepend_enabled_var.get(),
+            prepend_text=adv.prepend_text_var.get().strip(),
         )
 
         run_button.config(state="disabled")
         scram_button.config(state="normal")
 
         def worker():
+            futures = []
+            per_job_items = []
+            # Auto mode flow
+            if auto_mode_var.get():
+                from .scanner import list_top_level_media_subdirs
+                root_dir, auto_url = auto_view.get_values()
+                if not root_dir or not auto_url:
+                    run_pane.log_global("Auto mode: missing root directory or upload URL")
+                else:
+                    try:
+                        client = DiscordClient(token=params["token"], token_type=params["token_type"])  # type: ignore
+                        _g, ch_id, th_id = client.parse_ids_from_url(auto_url)
+                        if ch_id is None:
+                            raise ValueError("Invalid Discord URL")
+                        ch = client.get_channel(ch_id, request_timeout=params["request_timeout"])  # type: ignore
+                        ch_type = ch.get("type") if ch else None
+                        is_forum_like = ch_type in (15, 16) if ch is not None else False
+                        send_as_one = auto_view.get_send_as_one()
+                        if (is_forum_like and th_id is None) and not send_as_one:
+                            subdirs = list_top_level_media_subdirs(root_dir)
+                            if not subdirs:
+                                run_pane.log_global("Auto mode: no media subfolders found")
+                            max_workers = max(1, min(6, len(subdirs)))
+                            run_pane.log_global(f"Starting {len(subdirs)} auto job(s)...")
+                            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                                for idx, p in enumerate(subdirs, start=1):
+                                    cancel_event = threading.Event()
+                                    current_cancel_events.append(cancel_event)
+                                    def make_stop(ev: threading.Event):
+                                        return lambda: ev.set()
+                                    item = run_pane.add_job_panel(f"Auto {idx}: {p.name} -> {auto_url}", on_stop=make_stop(cancel_event))
+                                    run_pane.log_to(item, f"Queued: {p} -> {auto_url}")
+                                    per_job_items.append(item)
+                                    job_params = dict(params)
+                                    job_title = p.name
+                                    # Apply prepend text if enabled
+                                    if job_params.get("prepend_enabled", False) and job_params.get("prepend_text"):
+                                        job_title = f"{job_params['prepend_text']} {job_title}"
+                                    job_params["post_title"] = job_title
+                                    def make_logger(itm: dict):
+                                        return lambda msg: run_pane.log_to(itm, msg)
+                                    futures.append(ex.submit(
+                                        send_media_job,
+                                        input_dir=p,
+                                        channel_url=auto_url,
+                                        **job_params,
+                                        cancel_event=cancel_event,
+                                        on_log=make_logger(item),
+                                    ))
+                                future_to_item = {fut: itm for fut, itm in zip(futures, per_job_items)}
+                                for f in as_completed(futures):
+                                    item = future_to_item.get(f)
+                                    try:
+                                        result = f.result()
+                                        if item is not None:
+                                            run_pane.log_to(item, f"Done: {result}")
+                                    except Exception as e:
+                                        if item is not None:
+                                            run_pane.log_to(item, f"Failed: {e}")
+                            run_pane.log_global("All auto jobs finished.")
+                        else:
+                            # Single job: either non-forum, existing thread, or forum with send_as_one
+                            # If forum-like without thread id and send_as_one, handle thread creation/checking
+                            if is_forum_like and th_id is None and send_as_one:
+                                # Check for existing threads and prompt user for choice
+                                title_holder: list[str] = [""]
+                                use_existing_holder: list[Optional[str]] = [None]  # thread_id if using existing
+                                done_evt = threading.Event()
+
+                                def _handle_thread_title():
+                                    try:
+                                        from tkinter import simpledialog, messagebox
+                                        import tkinter as tk
+
+                                        title_default = root_dir.name
+
+                                        # Apply prepend text if enabled
+                                        if params.get("prepend_enabled", False) and params.get("prepend_text"):
+                                            title_default = f"{params['prepend_text']} {title_default}"
+
+                                        # Check if a thread with this name already exists
+                                        existing_thread_id = client.find_existing_thread_by_name(
+                                            ch_id, title_default, request_timeout=params["request_timeout"]
+                                        )
+
+                                        if existing_thread_id:
+                                            # Thread exists, ask user what to do
+                                            root = tk._default_root  # Get the main window
+                                            choice = messagebox.askyesnocancel(
+                                                "Thread exists",
+                                                f'A thread named "{title_default}" already exists.\n\n'
+                                                "Do you want to upload to the existing thread?\n\n"
+                                                "Yes: Upload to existing thread\n"
+                                                "No: Create new thread with different name\n"
+                                                "Cancel: Cancel operation",
+                                                parent=root
+                                            )
+
+                                            if choice is None:  # Cancel
+                                                title_holder[0] = ""
+                                                use_existing_holder[0] = None
+                                            elif choice:  # Yes - use existing
+                                                title_holder[0] = title_default
+                                                use_existing_holder[0] = existing_thread_id
+                                            else:  # No - create new thread
+                                                # Generate unique name
+                                                base_name = title_default
+                                                counter = 2
+                                                while True:
+                                                    test_name = f"{base_name} ({counter})"
+                                                    test_thread_id = client.find_existing_thread_by_name(
+                                                        ch_id, test_name, request_timeout=params["request_timeout"]
+                                                    )
+                                                    if not test_thread_id:
+                                                        break
+                                                    counter += 1
+
+                                                # Ask for new name
+                                                new_title = simpledialog.askstring(
+                                                    "New thread title",
+                                                    f'Enter new thread title (suggested: "{test_name}"):',
+                                                    initialvalue=test_name,
+                                                    parent=root,
+                                                )
+                                                final_title = (new_title or "").strip() or test_name
+                                                # Apply prepend text if enabled and user didn't already include it
+                                                if params.get("prepend_enabled", False) and params.get("prepend_text"):
+                                                    prepend_text = params["prepend_text"]
+                                                    if not final_title.startswith(prepend_text):
+                                                        final_title = f"{prepend_text} {final_title}"
+                                                title_holder[0] = final_title
+                                                use_existing_holder[0] = None
+                                        else:
+                                            # No existing thread, just ask for title
+                                            t = simpledialog.askstring(
+                                                "Thread title",
+                                                "Enter thread title:",
+                                                initialvalue=title_default,
+                                                parent=root,
+                                            )
+                                            final_title = (t or "").strip() or title_default
+                                            # Apply prepend text if enabled and user didn't already include it
+                                            if params.get("prepend_enabled", False) and params.get("prepend_text"):
+                                                prepend_text = params["prepend_text"]
+                                                if not final_title.startswith(prepend_text):
+                                                    final_title = f"{prepend_text} {final_title}"
+                                            title_holder[0] = final_title
+                                            use_existing_holder[0] = None
+
+                                    except Exception as e:
+                                        # Fallback to default on error
+                                        fallback_title = root_dir.name
+                                        # Apply prepend text if enabled
+                                        if params.get("prepend_enabled", False) and params.get("prepend_text"):
+                                            fallback_title = f"{params['prepend_text']} {fallback_title}"
+                                        title_holder[0] = fallback_title
+                                        use_existing_holder[0] = None
+                                        run_pane.log(f"Error in thread handling: {e}")
+                                    finally:
+                                        try:
+                                            done_evt.set()
+                                        except Exception:
+                                            pass
+
+                                try:
+                                    run_pane.after(0, _handle_thread_title)
+                                    done_evt.wait()
+                                except Exception:
+                                    pass
+
+                                if title_holder[0]:
+                                    params["post_title"] = title_holder[0]
+                                    # If using existing thread, we need to modify the URL to include the thread ID
+                                    if use_existing_holder[0]:
+                                        auto_url = f"{auto_url}/threads/{use_existing_holder[0]}"
+                                        run_pane.log(f"Using existing thread: {title_holder[0]}")
+                                else:
+                                    # Cancelled or failed
+                                    run_pane.log("Thread creation cancelled")
+                                    run_button.config(state="normal")
+                                    scram_button.config(state="disabled")
+                                    return
+                            cancel_event = threading.Event()
+                            current_cancel_events.append(cancel_event)
+                            def make_stop(ev: threading.Event):
+                                return lambda: ev.set()
+                            item = run_pane.add_job_panel(f"Auto: {root_dir.name} -> {auto_url}", on_stop=make_stop(cancel_event))
+                            run_pane.log_to(item, f"Queued: {root_dir} -> {auto_url}")
+                            def make_logger(itm: dict):
+                                return lambda msg: run_pane.log_to(itm, msg)
+                            try:
+                                result = send_media_job(
+                                    input_dir=root_dir,
+                                    channel_url=auto_url,
+                                    **params,
+                                    cancel_event=cancel_event,
+                                    on_log=make_logger(item),
+                                )
+                                run_pane.log_to(item, f"Done: {result}")
+                            except Exception as e:
+                                run_pane.log_to(item, f"Failed: {e}")
+                    except Exception as e:
+                        run_pane.log_global(f"Auto mode failed to initialize: {e}")
+                run_button.config(state="normal")
+                scram_button.config(state="disabled")
+                return
+
+            # Manual mode flow (existing)
             run_pane.log_global(f"Starting {len(all_jobs)} job(s)...")
             max_workers = max(1, min(6, len(all_jobs)))
-            futures = []
             with ThreadPoolExecutor(max_workers=max_workers) as ex:
                 per_job_items = []
                 # Build per-job override map for URLs that are posts (no thread id)
@@ -700,8 +944,9 @@ def launch_gui() -> None:
                                 def _apply():
                                     try:
                                         # Update the jobs list row URL
-                                        if 0 <= idx_local - 1 < len(jobs_list.rows):
-                                            jobs_list.rows[idx_local - 1].url_var.set(new_url)
+                                        jobs = manual_view.jobs_list.rows
+                                        if 0 <= idx_local - 1 < len(jobs):
+                                            jobs[idx_local - 1].url_var.set(new_url)
                                         # Update the panel title to reflect the new URL
                                         frame = item_local.get("frame")
                                         if frame is not None:
@@ -767,20 +1012,28 @@ def launch_gui() -> None:
         theme = cfg.get("theme") or theme_var.get()
         theme_var.set(theme)
         _apply_theme(root, run_pane, theme)
-        # Restore jobs
-        jobs = cfg.get("jobs") or []
-        if isinstance(jobs, list):
-            norm_jobs: List[Tuple[str, str]] = []
-            for item in jobs:
-                if isinstance(item, dict):
-                    inp = item.get("input") or ""
-                    url = item.get("url") or ""
-                    if inp or url:
-                        norm_jobs.append((inp, url))
-                elif isinstance(item, (list, tuple)) and len(item) == 2:
-                    norm_jobs.append((str(item[0]), str(item[1])))
-            jobs_list.set_jobs(norm_jobs)
-            _refresh_per_job_fields()
+        # Restore mode + inputs
+        auto_mode = bool(cfg.get("auto_mode", False))
+        auto_mode_var.set(auto_mode)
+        _toggle_mode_ui()
+        if auto_mode:
+            auto_root = cfg.get("auto_root") or ""
+            auto_url = cfg.get("auto_url") or ""
+            auto_view.set_values(auto_root, auto_url)
+        else:
+            jobs = cfg.get("jobs") or []
+            if isinstance(jobs, list):
+                norm_jobs: List[Tuple[str, str]] = []
+                for item in jobs:
+                    if isinstance(item, dict):
+                        inp = item.get("input") or ""
+                        url = item.get("url") or ""
+                        if inp or url:
+                            norm_jobs.append((inp, url))
+                    elif isinstance(item, (list, tuple)) and len(item) == 2:
+                        norm_jobs.append((str(item[0]), str(item[1])))
+                manual_view.set_jobs(norm_jobs)
+                _refresh_per_job_fields()
         # Restore advanced options
         # Do not persist or restore token from GUI config for security
         adv.save_token_var.set(bool(cfg.get("save_token", True)))
@@ -798,15 +1051,18 @@ def launch_gui() -> None:
         adv.post_tag_var.set(cfg.get("post_tag", ""))
         adv.relay_from_var.set(cfg.get("relay_from", ""))
         adv.relay_dir_var.set(cfg.get("relay_dir", adv.relay_dir_var.get()))
+        adv.prepend_enabled_var.set(bool(cfg.get("prepend_enabled", False)))
+        adv.prepend_text_var.set(cfg.get("prepend_text", ""))
     except Exception:
         pass
 
     # Theme is toggled via button; no combobox binding needed
 
     def capture_config() -> dict:
-        return {
+        base = {
             "theme": theme_var.get(),
-            "jobs": [{"input": str(p), "url": u} for p, u in jobs_list.get_jobs()],
+            # Manual mode jobs only persisted when manual mode enabled
+            "jobs": [{"input": str(p), "url": u} for p, u in manual_view.get_jobs()],
             # Do not persist token in GUI config
             "save_token": bool(adv.save_token_var.get()),
             "token_type": adv.token_type_var.get(),
@@ -823,7 +1079,15 @@ def launch_gui() -> None:
             "post_tag": adv.post_tag_var.get(),
             "relay_from": adv.relay_from_var.get(),
             "relay_dir": adv.relay_dir_var.get(),
+            "prepend_enabled": bool(adv.prepend_enabled_var.get()),
+            "prepend_text": adv.prepend_text_var.get(),
         }
+        base["auto_mode"] = bool(auto_mode_var.get())
+        if auto_mode_var.get():
+            root_dir, auto_url = auto_view.get_values()
+            base["auto_root"] = str(root_dir or "")
+            base["auto_url"] = auto_url
+        return base
 
     # Track worker thread for graceful shutdown
     _worker_thread: list[Optional[threading.Thread]] = [None]

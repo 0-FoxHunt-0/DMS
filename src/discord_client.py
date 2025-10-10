@@ -68,9 +68,9 @@ class DiscordClient:
 
     @staticmethod
     def parse_channel_id_from_url(channel_url: str) -> Optional[str]:
-        # https://discord.com/channels/<guild>/<channel>
+        # https://discord.com/channels/<guild|@me>/<channel>
         # Support optional subdomains: canary.discord.com, ptb.discord.com
-        m = re.search(r"(?:^|://)(?:canary\.|ptb\.)?discord\.com/channels/\d+/(\d+)", channel_url)
+        m = re.search(r"(?:^|://)(?:canary\.|ptb\.)?discord\.com/channels/(?:\d+|@me)/(\d+)", channel_url)
         if not m:
             return None
         return m.group(1)
@@ -80,10 +80,10 @@ class DiscordClient:
         """Return (guild_id, channel_id, thread_id) parsed from a Discord URL, if present.
 
         Supports both forms:
-        - /channels/<guild>/<channel>/<thread>
-        - /channels/<guild>/<channel>/threads/<thread>
+        - /channels/<guild|@me>/<channel>/<thread>
+        - /channels/<guild|@me>/<channel>/threads/<thread>
         """
-        m = re.search(r"(?:^|://)(?:canary\.|ptb\.)?discord\.com/channels/(\d+)/(\d+)(?:/(?:threads/)?(\d+))?", channel_url)
+        m = re.search(r"(?:^|://)(?:canary\.|ptb\.)?discord\.com/channels/(\d+|@me)/(\d+)(?:/(?:threads/)?(\d+))?", channel_url)
         if not m:
             return None, None, None
         guild_id = m.group(1)
@@ -251,6 +251,25 @@ class DiscordClient:
             status = getattr(resp, "status_code", "unknown")
             text = getattr(resp, "text", "")
             raise RuntimeError(f"Discord text message failed: {status} {text}")
+
+    def find_existing_thread_by_name(self, channel_id: str, thread_name: str, request_timeout: float = 30.0) -> Optional[str]:
+        """Find an existing thread by name in a forum channel. Returns thread ID if found, None otherwise."""
+        # List active threads in the channel
+        url = f"{DISCORD_API}/channels/{channel_id}/threads/active"
+        resp = self._request_with_retries("GET", url, timeout=request_timeout)
+        if resp is None or not (200 <= resp.status_code < 300):
+            return None
+
+        try:
+            data = resp.json()
+            threads = data.get("threads", [])
+            for thread in threads:
+                if thread.get("name", "").strip().lower() == thread_name.strip().lower():
+                    return thread.get("id")
+        except Exception:
+            pass
+
+        return None
 
     def _request_with_retries(self, method: str, url: str, max_retries: int = 5, timeout: float = 30.0, **kwargs):
         backoff = 1.0
