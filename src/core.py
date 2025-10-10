@@ -13,7 +13,6 @@ from .discord_client import DiscordAuthError
 from .scanner import scan_media
 from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
 from .logging_utils import start_thread_log, sanitize_for_filename
-from .dedupe_store import DedupeStore
 
 
 def send_media_job(
@@ -73,7 +72,6 @@ def send_media_job(
             logging.info(msg)
 
     client = DiscordClient(token=token, token_type=token_type)
-    dedupe_store = DedupeStore()
     guild_id, channel_id, thread_id = client.parse_ids_from_url(channel_url)
     if channel_id is None:
         raise ValueError("Invalid channel URL. Expected https://discord.com/channels/<guild>/<channel>")
@@ -210,17 +208,16 @@ def send_media_job(
             return "Aborted: authentication failed (401/403)"
         except Exception as e:
             remote_existing = set()
-            _log(f"Warning: dedupe fetch failed, proceeding with local cache only: {e}")
+            _log(f"Warning: dedupe fetch failed, proceeding without dedupe: {e}")
 
-        # Merge remote history with local persistent cache
-        local_existing = dedupe_store.get_names_for(str(target_channel_id))
-        merged_existing = set(local_existing) | set(remote_existing)
+        # Use remote history set for dedupe
+        existing_set = set(remote_existing)
 
         # New: report the dedupe catalog size and local cache contribution
         try:
-            _log(f"Dedupe catalog size: {len(merged_existing)} filename(s) (local+remote)")
+            _log(f"Dedupe catalog size: {len(existing_set)} filename(s) (remote)")
             if dedupe_logger is not None:
-                dedupe_logger.info(f"[dedupe] local={len(local_existing)} remote={len(remote_existing)} merged={len(merged_existing)}")
+                dedupe_logger.info(f"[dedupe] remote={len(remote_existing)}")
         except Exception:
             pass
 
@@ -269,7 +266,7 @@ def send_media_job(
                     planned_variants.add(v)
             # Expand existing as well for a fair variant comparison
             existing_variants: set[str] = set()
-            for n in merged_existing:
+            for n in existing_set:
                 for v in _variants(n):
                     existing_variants.add(v)
             hits = len(planned_variants & existing_variants)
@@ -291,7 +288,7 @@ def send_media_job(
 
         # Apply filter
         scan_before = scan
-        scan = scan.filter_against_filenames(merged_existing)
+        scan = scan.filter_against_filenames(existing_set)
         try:
             before_count = len(scan_before.pairs) * 2 + len(scan_before.singles)
             after_count = len(scan.pairs) * 2 + len(scan.singles)
@@ -414,11 +411,6 @@ def send_media_job(
             try:
                 _log(f"Uploading: {', '.join(p.name for p in pending)}")
                 client.send_message_with_files(channel_id=target_channel_id, files=pending, content=None, timeout=upload_timeout)
-                # Update persistent dedupe cache after successful upload
-                try:
-                    dedupe_store.add_names_for(str(target_channel_id), [pp.name for pp in pending])
-                except Exception:
-                    pass
                 sent_count += len(pending)
             except DiscordAuthError as e:
                 _log(f"Authentication error while uploading: {e}")
@@ -494,10 +486,6 @@ def send_media_job(
                     _log(f"Uploading: {', '.join(p.name for p in files)}")
                     client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
                     sent_count += len(files)
-                    try:
-                        dedupe_store.add_names_for(str(target_channel_id), [pp.name for pp in files])
-                    except Exception:
-                        pass
                 except DiscordAuthError as e:
                     _log(f"Authentication error while uploading: {e}")
                     return "Aborted: authentication failed (401/403)"
@@ -535,10 +523,6 @@ def send_media_job(
                     )
                     with lock:
                         sent_count += len(files)
-                    try:
-                        dedupe_store.add_names_for(str(target_channel_id), [pp.name for pp in files])
-                    except Exception:
-                        pass
                 except DiscordAuthError as e:
                     _log(f"Authentication error while uploading: {e}")
                     # Signal all workers to stop and drain the queue
