@@ -194,6 +194,11 @@ def send(
             from .scanner import list_top_level_media_subdirs, has_root_level_media, suggest_thread_title_for_subdir
             subdirs = list_top_level_media_subdirs(input_dir)
             root_has = has_root_level_media(input_dir)
+            try:
+                names = ", ".join(p.name for p in subdirs) or "(none)"
+                rprint(f"[cyan]CLI split: root_has_media={root_has}; subfolders detected={len(subdirs)} -> {names}[/cyan]")
+            except Exception:
+                pass
             groups: list[tuple[str, Path, bool]] = []  # (title_suggestion, path, only_root_level)
             if root_has:
                 groups.append((input_dir.name, input_dir, True))

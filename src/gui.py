@@ -487,7 +487,7 @@ def _to_int(s: str, default: int) -> int:
         return default
 
 
-CONFIG_PATH = CONFIG_DIR / "adms_gui.json"
+CONFIG_PATH = CONFIG_DIR / "gui_settings.json"
 
 
 def _load_config() -> dict:
@@ -798,6 +798,11 @@ def launch_gui() -> None:
                             # Determine groups: root-only files and subfolders with media
                             subdirs = list_top_level_media_subdirs(root_dir)
                             root_has = has_root_level_media(root_dir)
+                            try:
+                                names = ", ".join(p.name for p in subdirs) or "(none)"
+                                run_pane.log_global(f"Auto mode: root_has_media={root_has}; subfolders detected={len(subdirs)} -> {names}")
+                            except Exception:
+                                pass
                             groups: list[tuple[str, Path, bool]] = []  # (title_suggestion, path, only_root_level)
                             if root_has:
                                 # Root-only group uses root_dir, flagged to filter at core layer
