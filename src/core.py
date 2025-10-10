@@ -316,17 +316,22 @@ def send_media_job(
                     time.sleep(max(0.0, delay_seconds))
 
             # Batch segmented videos so they appear in grid
-            only_videos = [p for p in files if p.suffix.lower() in VIDEO_EXTS]
-            non_videos = [p for p in files if p.suffix.lower() not in VIDEO_EXTS]
-            batches: List[List[Path]] = []
-            if only_videos:
-                for i in range(0, len(only_videos), MAX_ATTACHMENTS):
-                    batches.append(only_videos[i:i + MAX_ATTACHMENTS])
-            if non_videos:
-                for p in non_videos:
-                    batches.append([p])
+            # Only split videos/non-videos if this is actually a segmented group
+            if rk in segmented_keys:
+                only_videos = [p for p in files if p.suffix.lower() in VIDEO_EXTS]
+                non_videos = [p for p in files if p.suffix.lower() not in VIDEO_EXTS]
+                batches: List[List[Path]] = []
+                if only_videos:
+                    for i in range(0, len(only_videos), MAX_ATTACHMENTS):
+                        batches.append(only_videos[i:i + MAX_ATTACHMENTS])
+                if non_videos:
+                    for p in non_videos:
+                        batches.append([p])
 
-            if not batches:
+                if not batches:
+                    batches = [files]
+            else:
+                # Non-segmented pairs should be sent together
                 batches = [files]
 
             for batch in batches:
