@@ -52,7 +52,7 @@ def get_config_dir() -> Path:
 
 # Resolved config directory and key files
 CONFIG_DIR = get_config_dir()
-GUI_SETTINGS_PATH = CONFIG_DIR / "@.gui_settings.json"
+GUI_SETTINGS_PATH = CONFIG_DIR / "gui_settings.json"
 DOTENV_PATH = CONFIG_DIR / ".env"
 
 
@@ -70,7 +70,7 @@ def ensure_config_location() -> None:
     # Only migrate when using the package dir
     try:
         if CONFIG_DIR == PACKAGE_CONFIG_DIR:
-            src_settings = USER_CONFIG_DIR / "@.gui_settings.json"
+            src_settings = USER_CONFIG_DIR / "gui_settings.json"
             dst_settings = GUI_SETTINGS_PATH
             if src_settings.exists() and not dst_settings.exists():
                 try:
