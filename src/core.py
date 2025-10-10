@@ -37,6 +37,9 @@ def send_media_job(
     concurrency: int = 1,
     segment_separators: bool = True,
     separator_text: str = "┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃",
+    # Accepted but not used directly here; consumed by GUI flow prior to invoking this function
+    prepend_enabled: bool = False,
+    prepend_text: str = "",
     media_types: Optional[List[str]] = None,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
