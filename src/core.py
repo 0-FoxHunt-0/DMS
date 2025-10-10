@@ -76,14 +76,14 @@ def send_media_job(
             _log("Dry run: skipping thread creation; will dedupe against parent channel if enabled.")
             # Keep target_channel_id as parent channel for dry-run
         else:
-        title = post_title or Path(input_dir).name
-        applied_tag_ids = None
-        if ch and post_tag:
-            tag_l = post_tag.strip().lower()
-            for t in ch.get("available_tags", []):
-                if str(t.get("name", "")).lower() == tag_l:
-                    applied_tag_ids = [t.get("id")]
-                    break
+            title = post_title or Path(input_dir).name
+            applied_tag_ids = None
+            if ch and post_tag:
+                tag_l = post_tag.strip().lower()
+                for t in ch.get("available_tags", []):
+                    if str(t.get("name", "")).lower() == tag_l:
+                        applied_tag_ids = [t.get("id")]
+                        break
             _log(f"Creating new post in forum/media channel: title='{title}' tag='{post_tag or ''}'")
             new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
             if not new_thread_id:
