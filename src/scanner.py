@@ -80,12 +80,46 @@ class ScanResult:
         filtered_pairs: List[PairItem] = []
         leftover_singles: List[SingleItem] = []
 
-        # Normalize existing names to lowercase for case-insensitive compare
-        existing_l = {name.lower() for name in existing}
+        # Normalize existing names to lowercase and also include bracket-stripped variants
+        def _strip_trailing_brackets_from_stem(stem: str) -> str:
+            s = stem
+            try:
+                while True:
+                    new_s = re.sub(r"\s*\[[^\]]+\]\s*$", "", s)
+                    if new_s == s:
+                        break
+                    s = new_s
+            except Exception:
+                return stem
+            return s
+
+        def _variants(name: str) -> List[str]:
+            name_l = (name or "").lower()
+            try:
+                dot = name_l.rfind('.')
+                if dot <= 0:
+                    base = name_l
+                    ext = ""
+                else:
+                    base = name_l[:dot]
+                    ext = name_l[dot:]
+                stripped = _strip_trailing_brackets_from_stem(base) + ext
+                if stripped != name_l:
+                    return [name_l, stripped]
+                return [name_l]
+            except Exception:
+                return [name_l]
+
+        existing_l: Set[str] = set()
+        for n in existing:
+            for v in _variants(n):
+                existing_l.add(v)
 
         for pair in self.pairs:
-            mp4_exists = pair.mp4_path.name.lower() in existing_l
-            gif_exists = pair.gif_path.name.lower() in existing_l
+            mp4_name = pair.mp4_path.name
+            gif_name = pair.gif_path.name
+            mp4_exists = any(v in existing_l for v in _variants(mp4_name))
+            gif_exists = any(v in existing_l for v in _variants(gif_name))
             if not mp4_exists and not gif_exists:
                 filtered_pairs.append(pair)
             else:
@@ -94,7 +128,7 @@ class ScanResult:
                 if not gif_exists:
                     leftover_singles.append(SingleItem(root_key=pair.root_key, path=pair.gif_path))
 
-        filtered_singles: List[SingleItem] = [s for s in self.singles if s.path.name.lower() not in existing_l]
+        filtered_singles: List[SingleItem] = [s for s in self.singles if not any(v in existing_l for v in _variants(s.path.name))]
         filtered_singles.extend(leftover_singles)
 
         return ScanResult(pairs=filtered_pairs, singles=filtered_singles)
