@@ -144,7 +144,7 @@ def send(
     skip_oversize: bool = typer.Option(True, help="Skip files exceeding max_file_mb instead of attempting upload"),
     concurrency: int = typer.Option(1, help="Number of concurrent uploads (messages)"),
     segment_separators: bool = typer.Option(True, help="Send a separator message before and after each segmented group"),
-    separator_text: str = typer.Option("┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃", help="Text used as the separator message"),
+    separator_text: str = typer.Option("----------------------------------------", help="Text used as the separator message"),
 ) -> None:
     if log_file is None:
         default_dir = LOG_DIR

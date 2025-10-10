@@ -252,6 +252,25 @@ class DiscordClient:
             text = getattr(resp, "text", "")
             raise RuntimeError(f"Discord text message failed: {status} {text}")
 
+    def get_last_message_content(self, channel_id: str, request_timeout: float = 30.0) -> Optional[str]:
+        """Return the content of the most recent message in a channel/thread, if any."""
+        url = f"{DISCORD_API}/channels/{channel_id}/messages"
+        params = {"limit": 1}
+        resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
+        if resp is None:
+            return None
+        if resp.status_code in (401, 403):
+            raise DiscordAuthError(f"Discord fetch last message unauthorized: {resp.status_code}")
+        try:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                msg = data[0]
+                if isinstance(msg, dict):
+                    return str(msg.get("content") or "")
+        except Exception:
+            return None
+        return None
+
     def find_existing_thread_by_name(self, channel_id: str, thread_name: str, request_timeout: float = 30.0) -> Optional[str]:
         """Find an existing thread by name in a forum channel. Returns thread ID if found, None otherwise."""
         # List active threads in the channel

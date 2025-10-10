@@ -36,7 +36,7 @@ def send_media_job(
     on_thread_created: Optional[callable] = None,
     concurrency: int = 1,
     segment_separators: bool = True,
-    separator_text: str = "┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃",
+    separator_text: str = "----------------------------------------",
     # Accepted but not used directly here; consumed by GUI flow prior to invoking this function
     prepend_enabled: bool = False,
     prepend_text: str = "",
@@ -72,6 +72,10 @@ def send_media_job(
     is_forum_like = ch_type in (15, 16) if ch is not None else False
     target_channel_id = channel_id
     if is_forum_like and thread_id is None:
+        if dry_run:
+            _log("Dry run: skipping thread creation; will dedupe against parent channel if enabled.")
+            # Keep target_channel_id as parent channel for dry-run
+        else:
         title = post_title or Path(input_dir).name
         applied_tag_ids = None
         if ch and post_tag:
@@ -80,20 +84,20 @@ def send_media_job(
                 if str(t.get("name", "")).lower() == tag_l:
                     applied_tag_ids = [t.get("id")]
                     break
-        _log(f"Creating new post in forum/media channel: title='{title}' tag='{post_tag or ''}'")
-        new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
-        if not new_thread_id:
-            raise RuntimeError("Failed to create post thread")
-        target_channel_id = new_thread_id
-        # Inform caller about the created thread so UI/clients can update URLs
-        try:
-            if on_thread_created is not None:
-                # Prefer the compact /channels/<guild>/<channel>/<thread> form
-                new_thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
-                on_thread_created(new_thread_url)
-        except Exception:
-            # Never let callback issues break the flow
-            pass
+            _log(f"Creating new post in forum/media channel: title='{title}' tag='{post_tag or ''}'")
+            new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
+            if not new_thread_id:
+                raise RuntimeError("Failed to create post thread")
+            target_channel_id = new_thread_id
+            # Inform caller about the created thread so UI/clients can update URLs
+            try:
+                if on_thread_created is not None:
+                    # Prefer the compact /channels/<guild>/<channel>/<thread> form
+                    new_thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
+                    on_thread_created(new_thread_url)
+            except Exception:
+                # Never let callback issues break the flow
+                pass
     elif thread_id is not None:
         target_channel_id = thread_id
 
@@ -221,41 +225,80 @@ def send_media_job(
 
     if segment_separators and segmented_keys:
         sent_for_key = defaultdict(int)
+        MAX_ATTACHMENTS = 10
         for rk, files in items:
             if _should_cancel():
                 break
             if rk in segmented_keys and sent_for_key[rk] == 0:
+                # Avoid duplicate separators: check last message content
                 try:
-                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                    last = client.get_last_message_content(target_channel_id, request_timeout=request_timeout)
                 except DiscordAuthError as e:
-                    _log(f"Authentication error while sending separator: {e}")
+                    _log(f"Authentication error while checking last message: {e}")
                     return "Aborted: authentication failed (401/403)"
                 except Exception as e:
-                    _log(f"Warning: failed to send separator for {rk}: {e}")
-                time.sleep(max(0.0, delay_seconds))
+                    last = None
+                    _log(f"Warning: failed to check last message: {e}")
+                if last != separator_text:
+                    try:
+                        client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                    except DiscordAuthError as e:
+                        _log(f"Authentication error while sending separator: {e}")
+                        return "Aborted: authentication failed (401/403)"
+                    except Exception as e:
+                        _log(f"Warning: failed to send separator for {rk}: {e}")
+                    time.sleep(max(0.0, delay_seconds))
 
-            try:
-                _log(f"Uploading: {', '.join(p.name for p in files)}")
-                client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
-                sent_count += len(files)
-            except DiscordAuthError as e:
-                _log(f"Authentication error while uploading: {e}")
-                return "Aborted: authentication failed (401/403)"
-            except Exception as e:
-                _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
-            finally:
-                sent_for_key[rk] += 1
-                time.sleep(max(0.0, delay_seconds))
+            # Batch segmented videos so they appear in grid
+            only_videos = [p for p in files if p.suffix.lower() in VIDEO_EXTS]
+            non_videos = [p for p in files if p.suffix.lower() not in VIDEO_EXTS]
+            batches: List[List[Path]] = []
+            if only_videos:
+                for i in range(0, len(only_videos), MAX_ATTACHMENTS):
+                    batches.append(only_videos[i:i + MAX_ATTACHMENTS])
+            if non_videos:
+                for p in non_videos:
+                    batches.append([p])
+
+            if not batches:
+                batches = [files]
+
+            for batch in batches:
+                if _should_cancel():
+                    break
+                try:
+                    _log(f"Uploading: {', '.join(p.name for p in batch)}")
+                    client.send_message_with_files(channel_id=target_channel_id, files=batch, content=None, timeout=upload_timeout)
+                    sent_count += len(batch)
+                except DiscordAuthError as e:
+                    _log(f"Authentication error while uploading: {e}")
+                    return "Aborted: authentication failed (401/403)"
+                except Exception as e:
+                    _log(f"Failed to upload {', '.join(p.name for p in batch)}: {e}")
+                finally:
+                    time.sleep(max(0.0, delay_seconds))
+
+            sent_for_key[rk] += 1
 
             if rk in segmented_keys and sent_for_key[rk] == counts[rk]:
+                # Avoid duplicate trailing separator
                 try:
-                    client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                    last = client.get_last_message_content(target_channel_id, request_timeout=request_timeout)
                 except DiscordAuthError as e:
-                    _log(f"Authentication error while sending separator: {e}")
+                    _log(f"Authentication error while checking last message: {e}")
                     return "Aborted: authentication failed (401/403)"
                 except Exception as e:
-                    _log(f"Warning: failed to send separator for {rk}: {e}")
-                time.sleep(max(0.0, delay_seconds))
+                    last = None
+                    _log(f"Warning: failed to check last message: {e}")
+                if last != separator_text:
+                    try:
+                        client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                    except DiscordAuthError as e:
+                        _log(f"Authentication error while sending separator: {e}")
+                        return "Aborted: authentication failed (401/403)"
+                    except Exception as e:
+                        _log(f"Warning: failed to send separator for {rk}: {e}")
+                    time.sleep(max(0.0, delay_seconds))
     else:
         # Bounded concurrent uploader using worker threads and a task queue
         q: Queue = Queue()
