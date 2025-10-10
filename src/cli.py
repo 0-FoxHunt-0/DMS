@@ -15,6 +15,14 @@ from .discord_client import DiscordClient
 from .scanner import ScanResult, scan_media
 from .core import send_media_job
 from .config import load_env, set_env_var
+from .logging_utils import (
+    init_run_logging,
+    prune_old_runs,
+    sanitize_settings,
+    format_kv,
+    start_thread_log,
+    sanitize_for_filename,
+)
 
 
 load_env()
@@ -33,10 +41,10 @@ def _tee_print(*args, level: str = "info", **kwargs):
 rprint = _tee_print  # type: ignore
 
 def _setup_logging(log_file: Path) -> None:
+    # Legacy helper retained for compatibility; not used in the new flow
     log_file.parent.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    # Clear existing handlers to avoid duplicates
     for h in list(root.handlers):
         root.removeHandler(h)
     fh = logging.FileHandler(str(log_file), encoding="utf-8")
@@ -46,24 +54,18 @@ def _setup_logging(log_file: Path) -> None:
 
 
 def _cleanup_old_logs(log_dir: Path, keep: int = 5) -> None:
-    """Remove old run_*.log files, keeping the most recent `keep` files.
-
-    This is a lightweight cleanup to prevent unbounded growth of the logs directory.
-    """
+    # Legacy helper retained for compatibility; not used in the new flow
     try:
         if not log_dir.exists():
             return
         log_files = list(log_dir.glob("run_*.log"))
-        # Sort newest first by modification time
         log_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         for old in log_files[keep:]:
             try:
                 old.unlink()
             except Exception:
-                # Best-effort cleanup; ignore files that cannot be deleted
                 pass
     except Exception:
-        # Never let cleanup errors impact the main flow
         pass
 
 app = typer.Typer(add_completion=False, help="Send media to Discord, pairing MP4+GIF and handling segments.")
@@ -148,18 +150,41 @@ def send(
     ignore_segmentation: bool = typer.Option(False, help="Treat all files as non-segmented: no separators, no grouping"),
     split_by_subfolders: bool = typer.Option(False, help="When posting to Forum/Media without thread id, split into one thread for root files and one per top-level subfolder"),
 ) -> None:
+    # Initialize per-run logging (root run.log + per-thread/job logs)
     if log_file is None:
-        # Write logs to a local ./logs directory by default
-        default_dir = Path("logs")
-        try:
-            default_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        log_file = default_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    _setup_logging(log_file)
-    rprint(f"[green]Logging to {log_file}[/green]")
-    # Best-effort: keep only the last 5 run logs
-    _cleanup_old_logs(log_file.parent, keep=5)
+        run_dir, run_id, root_log = init_run_logging(base_dir=Path("logs"))
+        rprint(f"[green]Logging to {root_log}[/green]")
+        prune_old_runs(Path("logs"), keep=5)
+    else:
+        run_dir, run_id, root_log = init_run_logging(log_file=log_file)
+        rprint(f"[green]Logging to {root_log}[/green]")
+    # Log run metadata
+    try:
+        settings = {
+            "token_type": token_type,
+            "ignore_dedupe": ignore_dedupe,
+            "dry_run": dry_run,
+            "history_limit": history_limit,
+            "request_timeout": request_timeout,
+            "upload_timeout": upload_timeout,
+            "delay_seconds": delay_seconds,
+            "max_file_mb": max_file_mb,
+            "skip_oversize": skip_oversize,
+            "concurrency": concurrency,
+            "segment_separators": segment_separators,
+            "ignore_segmentation": ignore_segmentation,
+            "split_by_subfolders": split_by_subfolders,
+            "relay_from": relay_from or "",
+            "relay_download_dir": relay_download_dir,
+            "post_title": post_title or "",
+            "post_tag": post_tag or "",
+        }
+        ssettings = sanitize_settings(settings)
+        logging.info(
+            f"RUN START interface=cli input_dir={input_dir} url={channel_url} {format_kv(ssettings)}"
+        )
+    except Exception:
+        pass
     if not token:
         rprint("[yellow]No token found. You'll be prompted and can save it for reuse.[/yellow]")
         token = typer.prompt("Enter Discord token", hide_input=True)
@@ -274,6 +299,12 @@ def send(
                         rprint(msg)
                     except Exception:
                         pass
+                # Create per-job logger now; core will switch to per-thread logger if one is created
+                try:
+                    key = f"job-{idx}-{sanitize_for_filename(path_to_send.name)}"
+                    job_logger = start_thread_log(run_dir, key)
+                except Exception:
+                    job_logger = None  # type: ignore
                 result = send_media_job(
                     input_dir=path_to_send,
                     channel_url=group_url,
@@ -296,6 +327,8 @@ def send(
                     separator_text=separator_text,
                     ignore_segmentation=ignore_segmentation,
                     on_log=_on_log,
+                    logger=job_logger,  # type: ignore[arg-type]
+                    run_dir=run_dir,
                     only_root_level=only_root,
                 )
                 rprint(f"[green]{result}[/green]")
@@ -348,6 +381,13 @@ def send(
         except Exception:
             pass
 
+    # Create a single-job logger for non-split flows
+    try:
+        key = f"job-1-{sanitize_for_filename(input_dir.name)}"
+        job_logger = start_thread_log(run_dir, key)
+    except Exception:
+        job_logger = None  # type: ignore
+
     result = send_media_job(
         input_dir=input_dir,
         channel_url=channel_url,
@@ -369,6 +409,8 @@ def send(
         segment_separators=segment_separators,
         separator_text=separator_text,
         ignore_segmentation=ignore_segmentation,
+        logger=job_logger,  # type: ignore[arg-type]
+        run_dir=run_dir,
         on_log=_on_log,
     )
     rprint(f"[green]{result}[/green]")

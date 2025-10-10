@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from .config import load_env, set_env_var, CONFIG_DIR
+from .logging_utils import init_run_logging, prune_old_runs, sanitize_settings, format_kv, start_thread_log, sanitize_for_filename
 from .gui_modes import ManualModeView, AutoModeView
 from .core import send_media_job
 from .discord_client import DiscordClient
@@ -596,37 +597,14 @@ def _apply_theme(root: tk.Tk, run_pane: RunPane, mode: str) -> None:
 
 def launch_gui() -> None:
     load_env()
-    # Setup logging to ./logs like the CLI does
+    # Initialize per-run logging directory and root log
     try:
-        import logging as _logging
-        from datetime import datetime as _dt
-        logs_dir = Path("logs")
-        try:
-            logs_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        log_path = logs_dir / f"run_{_dt.now().strftime('%Y%m%d_%H%M%S')}.log"
-        root = _logging.getLogger()
-        root.setLevel(_logging.INFO)
-        for h in list(root.handlers):
-            root.removeHandler(h)
-        fh = _logging.FileHandler(str(log_path), encoding="utf-8")
-        fmt = _logging.Formatter(fmt="%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-        fh.setFormatter(fmt)
-        root.addHandler(fh)
-        # Keep last 5 logs
-        try:
-            log_files = list(logs_dir.glob("run_*.log"))
-            log_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            for old in log_files[5:]:
-                try:
-                    old.unlink()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        run_dir, run_id, root_log = init_run_logging(base_dir=Path("logs"))
+        prune_old_runs(Path("logs"), keep=5)
+        logging.info(f"RUN START interface=gui")
     except Exception:
-        pass
+        # Fallback: proceed without failing GUI
+        run_dir = Path("logs") / "run_fallback"
     root = tk.Tk()
     root.title("AutoDisMediaSend")
     root.minsize(900, 600)
@@ -772,6 +750,19 @@ def launch_gui() -> None:
         if media_types:
             params["media_types"] = media_types
 
+        # Log run metadata for GUI
+        try:
+            mode = "auto" if auto_mode_var.get() else "manual"
+            jobs_preview = (
+                ", ".join(f"{p} -> {u}" for p, u in all_jobs) if all_jobs else "(auto or none yet)"
+            )
+            settings = dict(params)
+            # Do not include token
+            settings.pop("token", None)
+            logging.info(f"RUN START interface=gui mode={mode} jobs=[{jobs_preview}] {format_kv(sanitize_settings(settings))}")
+        except Exception:
+            pass
+
         run_button.config(state="disabled")
         scram_button.config(state="normal")
 
@@ -894,6 +885,12 @@ def launch_gui() -> None:
                                     if only_root:
                                         job_params["only_root_level"] = True
 
+                                    # Create a per-job logger; core will switch to per-thread logger if one is created
+                                    try:
+                                        job_logger = start_thread_log(run_dir, f"job-auto-{idx}-{sanitize_for_filename(path_to_send.name)}")
+                                    except Exception:
+                                        job_logger = None  # type: ignore
+
                                     def make_logger(itm: dict):
                                         return lambda msg: run_pane.log_to(itm, msg)
                                     futures.append(ex.submit(
@@ -903,6 +900,8 @@ def launch_gui() -> None:
                                         **job_params,
                                         cancel_event=cancel_event,
                                         on_log=make_logger(item),
+                                        logger=job_logger,  # type: ignore[arg-type]
+                                        run_dir=run_dir,
                                     ))
                                 future_to_item = {fut: itm for fut, itm in zip(futures, per_job_items)}
                                 for f in as_completed(futures):
@@ -1031,6 +1030,12 @@ def launch_gui() -> None:
                                 return lambda: ev.set()
                             item = run_pane.add_job_panel(f"Auto: {root_dir.name} -> {auto_url}", on_stop=make_stop(cancel_event))
                             run_pane.log_to(item, f"Queued: {root_dir} -> {auto_url}")
+                            # Create job logger for this single auto job
+                            try:
+                                job_logger = start_thread_log(run_dir, f"job-auto-{sanitize_for_filename(root_dir.name)}")
+                            except Exception:
+                                job_logger = None  # type: ignore
+
                             def make_logger(itm: dict):
                                 return lambda msg: run_pane.log_to(itm, msg)
                             try:
@@ -1040,6 +1045,8 @@ def launch_gui() -> None:
                                     **params,
                                     cancel_event=cancel_event,
                                     on_log=make_logger(item),
+                                    logger=job_logger,  # type: ignore[arg-type]
+                                    run_dir=run_dir,
                                 )
                                 run_pane.log_to(item, f"Done: {result}")
                             except Exception as e:
@@ -1081,6 +1088,12 @@ def launch_gui() -> None:
                         job_params["post_title"] = title_override
                     if tag_override:
                         job_params["post_tag"] = tag_override
+                    # Create job logger for this manual job
+                    try:
+                        job_logger = start_thread_log(run_dir, f"job-{idx}-{sanitize_for_filename(p.name)}")
+                    except Exception:
+                        job_logger = None  # type: ignore
+
                     def make_logger(itm: dict):
                         return lambda msg: run_pane.log_to(itm, msg)
                     def make_on_thread_created(idx_local: int, item_local: dict, job_name: str):
@@ -1116,6 +1129,8 @@ def launch_gui() -> None:
                         **job_params,
                         cancel_event=cancel_event,
                         on_log=make_logger(item),
+                        logger=job_logger,  # type: ignore[arg-type]
+                        run_dir=run_dir,
                         on_thread_created=make_on_thread_created(idx, item, p.name),
                     ))
                 # Map futures to their corresponding UI panels to avoid index mismatches

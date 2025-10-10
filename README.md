@@ -50,6 +50,18 @@ Or via the installed command after `pip install`:
 discord-send "D:\\path\\to\\input" "https://discord.com/channels/<guild_id>/<channel_id>" --token <DISCORD_TOKEN>
 ```
 
+### Logging
+
+When a run starts (CLI or GUI), the app now creates a dedicated run directory:
+
+- `logs/run_<timestamp>/run.log` — the root log for the entire run
+- `logs/run_<timestamp>/job-*.log` — one log per job (pre-thread)
+- `logs/run_<timestamp>/thread-*.log` — one log per created/reused thread
+
+The root log includes metadata such as interface (cli/gui), GUI mode (auto/manual), input directory, destination URL, and sanitized launch settings. Sensitive fields (e.g., tokens) are never logged.
+
+If you pass `--log-file <path>` on the CLI, the root log is written to that path, and a sibling directory named after the file’s stem is used for per-thread logs.
+
 Options:
 
 - `--token` or `DISCORD_TOKEN` env var: Discord token

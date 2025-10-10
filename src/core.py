@@ -11,6 +11,7 @@ from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
 from .scanner import scan_media
 from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
+from .logging_utils import start_thread_log, sanitize_for_filename
 
 
 def send_media_job(
@@ -43,19 +44,29 @@ def send_media_job(
     media_types: Optional[List[str]] = None,
     ignore_segmentation: bool = False,
     only_root_level: bool = False,
+    logger: Optional[logging.Logger] = None,
+    run_dir: Optional[Path] = None,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
     Returns a short human-readable result string.
     """
+    current_logger: Optional[logging.Logger] = logger
+
     def _log(msg: str) -> None:
+        # Always echo to UI if provided
         try:
             if on_log is not None:
                 on_log(msg)
+        except Exception:
+            pass
+        # And persist to file logs
+        try:
+            if current_logger is not None:
+                current_logger.info(msg)
             else:
                 logging.info(msg)
         except Exception:
-            # Never allow UI logging failures to break the job
             logging.info(msg)
 
     client = DiscordClient(token=token, token_type=token_type)
@@ -95,24 +106,53 @@ def send_media_job(
                 _log(f"[core] thread lookup error: {e}")
             if existing_id:
                 target_channel_id = existing_id
-                _log(f"[core] using existing thread: id={existing_id} title='{title}'")
+                thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{existing_id}"
+                _log(f"[core] using existing thread: id={existing_id} title='{title}' url={thread_url}")
+                # Attach per-thread logger when possible
+                try:
+                    if run_dir is not None:
+                        key = f"thread-{sanitize_for_filename(title)}-{str(existing_id)[:8]}"
+                        tl = start_thread_log(run_dir, key)
+                        # switch current logger for remainder of job
+                        current_logger = tl
+                except Exception:
+                    pass
             else:
                 _log(f"[core] creating new thread: title='{title}' tag='{post_tag or ''}'")
                 new_thread_id = client.start_forum_post(channel_id, title, content=title, applied_tag_ids=applied_tag_ids)
                 if not new_thread_id:
                     raise RuntimeError("Failed to create post thread")
                 target_channel_id = new_thread_id
+                thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
+                _log(f"[core] created thread: id={new_thread_id} title='{title}' url={thread_url}")
+                # Attach per-thread logger for remainder of job
+                try:
+                    if run_dir is not None:
+                        key = f"thread-{sanitize_for_filename(title)}-{str(new_thread_id)[:8]}"
+                        tl = start_thread_log(run_dir, key)
+                        current_logger = tl
+                except Exception:
+                    pass
                 # Inform caller about the created thread so UI/clients can update URLs
                 try:
                     if on_thread_created is not None:
                         # Prefer the compact /channels/<guild>/<channel>/<thread> form
-                        new_thread_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{new_thread_id}"
+                        new_thread_url = thread_url
                         on_thread_created(new_thread_url)
                 except Exception:
                     # Never let callback issues break the flow
                     pass
     elif thread_id is not None:
         target_channel_id = thread_id
+        # Known thread supplied; attach per-thread logger if run_dir present
+        try:
+            if run_dir is not None:
+                key = f"thread-{str(thread_id)[:8]}"
+                tl = start_thread_log(run_dir, key)
+                current_logger = tl
+                _log(f"[core] using provided thread id={thread_id} url=https://discord.com/channels/{guild_id}/{channel_id}/{thread_id}")
+        except Exception:
+            pass
 
     if relay_from:
         _g, _c, _t = client.parse_ids_from_url(relay_from)
