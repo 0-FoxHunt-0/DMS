@@ -272,19 +272,57 @@ class DiscordClient:
         return None
 
     def find_existing_thread_by_name(self, channel_id: str, thread_name: str, request_timeout: float = 30.0) -> Optional[str]:
-        """Find an existing thread by name in a forum channel. Returns thread ID if found, None otherwise."""
-        # List active threads in the channel
-        url = f"{DISCORD_API}/channels/{channel_id}/threads/active"
-        resp = self._request_with_retries("GET", url, timeout=request_timeout)
-        if resp is None or not (200 <= resp.status_code < 300):
+        """Find an existing thread by name in a forum channel. Returns thread ID if found, None otherwise.
+
+        Searches active threads first, then falls back to archived public (and private, best-effort).
+        """
+        def _match_name(threads: list, name: str) -> Optional[str]:
+            try:
+                name_l = (name or "").strip().lower()
+                for th in threads or []:
+                    if not isinstance(th, dict):
+                        continue
+                    if (th.get("name", "").strip().lower()) == name_l:
+                        return th.get("id")
+            except Exception:
+                return None
             return None
 
+        # Active threads
         try:
-            data = resp.json()
-            threads = data.get("threads", [])
-            for thread in threads:
-                if thread.get("name", "").strip().lower() == thread_name.strip().lower():
-                    return thread.get("id")
+            url = f"{DISCORD_API}/channels/{channel_id}/threads/active"
+            resp = self._request_with_retries("GET", url, timeout=request_timeout)
+            if resp is not None and (200 <= resp.status_code < 300):
+                data = resp.json()
+                tid = _match_name(data.get("threads", []), thread_name)
+                if tid:
+                    return tid
+        except Exception:
+            pass
+
+        # Archived public threads (first page)
+        try:
+            url = f"{DISCORD_API}/channels/{channel_id}/threads/archived/public"
+            resp = self._request_with_retries("GET", url, params={"limit": 100}, timeout=request_timeout)
+            if resp is not None and (200 <= resp.status_code < 300):
+                data = resp.json() if hasattr(resp, 'json') else {}
+                threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                tid = _match_name(threads or [], thread_name)
+                if tid:
+                    return tid
+        except Exception:
+            pass
+
+        # Archived private threads (joined by current user) - best effort
+        try:
+            url = f"{DISCORD_API}/channels/{channel_id}/users/@me/threads/archived/private"
+            resp = self._request_with_retries("GET", url, params={"limit": 100}, timeout=request_timeout)
+            if resp is not None and (200 <= resp.status_code < 300):
+                data = resp.json() if hasattr(resp, 'json') else {}
+                threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                tid = _match_name(threads or [], thread_name)
+                if tid:
+                    return tid
         except Exception:
             pass
 
