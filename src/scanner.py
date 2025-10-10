@@ -104,26 +104,34 @@ def scan_media(root_dir: Path) -> ScanResult:
 
         all_media_files = [f for f in parent_dir.iterdir() if f.is_file() and f.suffix.lower() in MEDIA_EXTS]
 
-        # Check if this directory contains segmented files (multiple files with same root + numeric suffixes)
-        stems_in_dir = [f.stem for f in all_media_files]
-        segmented_stems = []
-        for s in stems_in_dir:
-            root, seg_num = _normalize_name(s)
-            if seg_num is not None:
-                segmented_stems.append((root.lower(), seg_num))
+        # Check if this file is part of a segmented group
+        # Only treat a file as segmented if it has a numeric suffix AND
+        # there are multiple files with the same root but different segment numbers
+        file_root, file_seg_num = _normalize_name(stem)
 
-        # If we find segmented files in this directory, treat all files as potentially segmented
-        # Check if there are multiple files with the same root but different segment numbers
-        root_counts = {}
-        for root, seg_num in segmented_stems:
-            if root not in root_counts:
-                root_counts[root] = []
-            root_counts[root].append(seg_num)
+        if file_seg_num is not None:
+            # Check if this file is part of a segmented group
+            stems_in_dir = [f.stem for f in all_media_files]
+            segmented_stems = []
+            for s in stems_in_dir:
+                root, seg_num = _normalize_name(s)
+                if seg_num is not None:
+                    segmented_stems.append((root.lower(), seg_num))
 
-        should_check_segments = any(len(nums) > 1 for nums in root_counts.values())
+            # Check if there are multiple files with the same root but different segment numbers
+            root_counts = {}
+            for root, seg_num in segmented_stems:
+                if root not in root_counts:
+                    root_counts[root] = []
+                root_counts[root].append(seg_num)
+
+            # Only treat as segmented if this root has multiple segments
+            should_check_segments = len(root_counts.get(file_root.lower(), [])) > 1
+        else:
+            should_check_segments = False
 
         if should_check_segments:
-            root_name, seg_num = _normalize_name(stem)
+            root_name, seg_num = file_root, file_seg_num
         else:
             root_name, seg_num = stem, None
 
