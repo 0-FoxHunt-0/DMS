@@ -226,19 +226,31 @@ def send(
                     group_url = f"{channel_url}/threads/{existing_thread_id}"
                     rprint(f"[{idx}] Using existing thread: {job_title}")
                 else:
-                    # Ensure uniqueness by probing " (n)" variants, then prompt
+                    # Ensure uniqueness by probing " (n)" variants only when needed, then prompt
                     base_name = job_title
-                    counter = 2
-                    while True:
-                        test_name = f"{base_name} ({counter})"
-                        try:
-                            test_id = client.find_existing_thread_by_name(channel_id, test_name, request_timeout=request_timeout, guild_id=guild_id)
-                        except Exception:
-                            test_id = None
-                        if not test_id:
-                            break
-                        counter += 1
-                    final_title = typer.prompt(f"[{idx}] Enter thread title for '{path_to_send.name}'", default=test_name)
+
+                    # First check if the base name is available
+                    try:
+                        base_exists = client.find_existing_thread_by_name(channel_id, base_name, request_timeout=request_timeout, guild_id=guild_id) is not None
+                    except Exception:
+                        base_exists = False
+
+                    if not base_exists:
+                        # Base name is available, use it
+                        final_title = typer.prompt(f"[{idx}] Enter thread title for '{path_to_send.name}'", default=base_name)
+                    else:
+                        # Base name exists, find next available numbered variant
+                        counter = 2
+                        while True:
+                            test_name = f"{base_name} ({counter})"
+                            try:
+                                test_id = client.find_existing_thread_by_name(channel_id, test_name, request_timeout=request_timeout, guild_id=guild_id)
+                            except Exception:
+                                test_id = None
+                            if not test_id:
+                                break
+                            counter += 1
+                        final_title = typer.prompt(f"[{idx}] Enter thread title for '{path_to_send.name}'", default=test_name)
                     # Create thread now
                     applied_tag_ids = None
                     if ch and post_tag:
