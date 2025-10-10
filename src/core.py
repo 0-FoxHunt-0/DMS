@@ -295,85 +295,101 @@ def send_media_job(
         pass
 
     if segment_separators and segmented_keys:
-        sent_for_key = defaultdict(int)
+        # Aggregate segments per root key and send up to 10 attachments per message
         MAX_ATTACHMENTS = 10
+        started_group: set[str] = set()
+        pending_for_key: dict[str, List[Path]] = defaultdict(list)
+        remaining_segments: dict[str, int] = {rk: counts[rk] for rk in segmented_keys}
+
+        def _flush(rk_local: str) -> None:
+            nonlocal sent_count
+            pending = pending_for_key.get(rk_local) or []
+            if not pending:
+                return
+            try:
+                _log(f"Uploading: {', '.join(p.name for p in pending)}")
+                client.send_message_with_files(channel_id=target_channel_id, files=pending, content=None, timeout=upload_timeout)
+                sent_count += len(pending)
+            except DiscordAuthError as e:
+                _log(f"Authentication error while uploading: {e}")
+                raise
+            except Exception as e:
+                _log(f"Failed to upload {', '.join(p.name for p in pending)}: {e}")
+            finally:
+                pending_for_key[rk_local] = []
+                time.sleep(max(0.0, delay_seconds))
+
         for rk, files in items:
             if _should_cancel():
                 break
-            if rk in segmented_keys and sent_for_key[rk] == 0:
-                # Avoid duplicate separators: check last message content
-                try:
-                    last = client.get_last_message_content(target_channel_id, request_timeout=request_timeout)
-                except DiscordAuthError as e:
-                    _log(f"Authentication error while checking last message: {e}")
-                    return "Aborted: authentication failed (401/403)"
-                except Exception as e:
-                    last = None
-                    _log(f"Warning: failed to check last message: {e}")
-                if last != separator_text:
+            if rk in segmented_keys:
+                # Leading separator once per group
+                if rk not in started_group:
                     try:
-                        client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                        last = client.get_last_message_content(target_channel_id, request_timeout=request_timeout)
                     except DiscordAuthError as e:
-                        _log(f"Authentication error while sending separator: {e}")
+                        _log(f"Authentication error while checking last message: {e}")
                         return "Aborted: authentication failed (401/403)"
                     except Exception as e:
-                        _log(f"Warning: failed to send separator for {rk}: {e}")
-                    time.sleep(max(0.0, delay_seconds))
+                        last = None
+                        _log(f"Warning: failed to check last message: {e}")
+                    if last != separator_text:
+                        try:
+                            client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                        except DiscordAuthError as e:
+                            _log(f"Authentication error while sending separator: {e}")
+                            return "Aborted: authentication failed (401/403)"
+                        except Exception as e:
+                            _log(f"Warning: failed to send separator for {rk}: {e}")
+                        time.sleep(max(0.0, delay_seconds))
+                    started_group.add(rk)
 
-            # Batch segmented videos so they appear in grid
-            # Only split videos/non-videos if this is actually a segmented group
-            if rk in segmented_keys:
-                only_videos = [p for p in files if p.suffix.lower() in VIDEO_EXTS]
-                non_videos = [p for p in files if p.suffix.lower() not in VIDEO_EXTS]
-                batches: List[List[Path]] = []
-                if only_videos:
-                    for i in range(0, len(only_videos), MAX_ATTACHMENTS):
-                        batches.append(only_videos[i:i + MAX_ATTACHMENTS])
-                if non_videos:
-                    for p in non_videos:
-                        batches.append([p])
-
-                if not batches:
-                    batches = [files]
+                # Add this segment's files; flush if it would exceed attachment limit
+                current = pending_for_key[rk]
+                if current and (len(current) + len(files) > MAX_ATTACHMENTS):
+                    try:
+                        _flush(rk)
+                    except DiscordAuthError:
+                        return "Aborted: authentication failed (401/403)"
+                pending_for_key[rk].extend(files)
+                remaining_segments[rk] = max(0, remaining_segments.get(rk, 0) - 1)
+                # If we reached limit or this was the last segment -> flush
+                if len(pending_for_key[rk]) >= MAX_ATTACHMENTS or remaining_segments[rk] == 0:
+                    try:
+                        _flush(rk)
+                    except DiscordAuthError:
+                        return "Aborted: authentication failed (401/403)"
+                    # If this was the last segment for this group, send trailing separator
+                    if remaining_segments[rk] == 0:
+                        try:
+                            last = client.get_last_message_content(target_channel_id, request_timeout=request_timeout)
+                        except DiscordAuthError as e:
+                            _log(f"Authentication error while checking last message: {e}")
+                            return "Aborted: authentication failed (401/403)"
+                        except Exception as e:
+                            last = None
+                            _log(f"Warning: failed to check last message: {e}")
+                        if last != separator_text:
+                            try:
+                                client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
+                            except DiscordAuthError as e:
+                                _log(f"Authentication error while sending separator: {e}")
+                                return "Aborted: authentication failed (401/403)"
+                            except Exception as e:
+                                _log(f"Warning: failed to send separator for {rk}: {e}")
+                            time.sleep(max(0.0, delay_seconds))
             else:
-                # Non-segmented pairs should be sent together
-                batches = [files]
-
-            for batch in batches:
-                if _should_cancel():
-                    break
+                # Non-segmented: send as-is (pairs together)
                 try:
-                    _log(f"Uploading: {', '.join(p.name for p in batch)}")
-                    client.send_message_with_files(channel_id=target_channel_id, files=batch, content=None, timeout=upload_timeout)
-                    sent_count += len(batch)
+                    _log(f"Uploading: {', '.join(p.name for p in files)}")
+                    client.send_message_with_files(channel_id=target_channel_id, files=files, content=None, timeout=upload_timeout)
+                    sent_count += len(files)
                 except DiscordAuthError as e:
                     _log(f"Authentication error while uploading: {e}")
                     return "Aborted: authentication failed (401/403)"
                 except Exception as e:
-                    _log(f"Failed to upload {', '.join(p.name for p in batch)}: {e}")
+                    _log(f"Failed to upload {', '.join(p.name for p in files)}: {e}")
                 finally:
-                    time.sleep(max(0.0, delay_seconds))
-
-            sent_for_key[rk] += 1
-
-            if rk in segmented_keys and sent_for_key[rk] == counts[rk]:
-                # Avoid duplicate trailing separator
-                try:
-                    last = client.get_last_message_content(target_channel_id, request_timeout=request_timeout)
-                except DiscordAuthError as e:
-                    _log(f"Authentication error while checking last message: {e}")
-                    return "Aborted: authentication failed (401/403)"
-                except Exception as e:
-                    last = None
-                    _log(f"Warning: failed to check last message: {e}")
-                if last != separator_text:
-                    try:
-                        client.send_text_message(target_channel_id, separator_text, timeout=request_timeout)
-                    except DiscordAuthError as e:
-                        _log(f"Authentication error while sending separator: {e}")
-                        return "Aborted: authentication failed (401/403)"
-                    except Exception as e:
-                        _log(f"Warning: failed to send separator for {rk}: {e}")
                     time.sleep(max(0.0, delay_seconds))
     else:
         # Bounded concurrent uploader using worker threads and a task queue
