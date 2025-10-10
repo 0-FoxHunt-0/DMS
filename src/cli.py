@@ -145,6 +145,7 @@ def send(
     concurrency: int = typer.Option(1, help="Number of concurrent uploads (messages)"),
     segment_separators: bool = typer.Option(True, help="Send a separator message before and after each segmented group"),
     separator_text: str = typer.Option("----------------------------------------", help="Text used as the separator message"),
+    ignore_segmentation: bool = typer.Option(False, help="Treat all files as non-segmented: no separators, no grouping"),
 ) -> None:
     if log_file is None:
         default_dir = LOG_DIR
@@ -254,6 +255,7 @@ def send(
         concurrency=concurrency,
         segment_separators=segment_separators,
         separator_text=separator_text,
+        ignore_segmentation=ignore_segmentation,
         on_log=_on_log,
     )
     rprint(f"[green]{result}[/green]")

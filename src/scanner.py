@@ -93,7 +93,12 @@ def scan_media(root_dir: Path) -> ScanResult:
         rel_dir = p.parent.relative_to(root_dir).as_posix()
         dir_key = rel_dir or "."
         stem = p.stem
-        root_name, seg_num = _normalize_name(stem)
+        # Only treat numeric suffixes as segments when inside a "*_segments" directory
+        parent_name_l = p.parent.name.lower()
+        if parent_name_l.endswith("_segments"):
+            root_name, seg_num = _normalize_name(stem)
+        else:
+            root_name, seg_num = stem, None
         key = (dir_key, root_name.lower(), seg_num)
         if key not in buckets:
             buckets[key] = {}

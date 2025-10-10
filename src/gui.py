@@ -175,6 +175,9 @@ class AdvancedOptions(ttk.LabelFrame):
         ttk.Checkbutton(self, text="Ignore dedupe", variable=self.ignore_dedupe_var).grid(row=2, column=0, sticky="w", pady=(6, 0))
         ttk.Checkbutton(self, text="Dry run", variable=self.dry_run_var).grid(row=2, column=1, sticky="w", pady=(6, 0))
         ttk.Checkbutton(self, text="Skip oversize", variable=self.skip_oversize_var).grid(row=2, column=2, sticky="w", pady=(6, 0))
+        # Ignore segmentation
+        self.ignore_segmentation_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self, text="Ignore segmentation", variable=self.ignore_segmentation_var).grid(row=2, column=3, sticky="w", pady=(6, 0))
 
         # Numeric/text options
         def add_num(label: str, row: int, var: tk.StringVar, default: str, width: int = 8):
@@ -718,6 +721,7 @@ def launch_gui() -> None:
             concurrency=_to_int(adv.concurrency_var.get(), 1),
             prepend_enabled=adv.prepend_enabled_var.get(),
             prepend_text=adv.prepend_text_var.get().strip(),
+            ignore_segmentation=adv.ignore_segmentation_var.get(),
         )
 
         # Media types param
@@ -1083,6 +1087,7 @@ def launch_gui() -> None:
         adv.ignore_dedupe_var.set(bool(cfg.get("ignore_dedupe", False)))
         adv.dry_run_var.set(bool(cfg.get("dry_run", False)))
         adv.skip_oversize_var.set(bool(cfg.get("skip_oversize", True)))
+        adv.ignore_segmentation_var.set(bool(cfg.get("ignore_segmentation", False)))
         adv.history_limit_var.set(str(cfg.get("history_limit", adv.history_limit_var.get())))
         adv.request_timeout_var.set(str(cfg.get("request_timeout", adv.request_timeout_var.get())))
         adv.upload_timeout_var.set(str(cfg.get("upload_timeout", adv.upload_timeout_var.get())))
@@ -1116,6 +1121,7 @@ def launch_gui() -> None:
             "ignore_dedupe": bool(adv.ignore_dedupe_var.get()),
             "dry_run": bool(adv.dry_run_var.get()),
             "skip_oversize": bool(adv.skip_oversize_var.get()),
+            "ignore_segmentation": bool(adv.ignore_segmentation_var.get()),
             "history_limit": _to_int(adv.history_limit_var.get(), 1000),
             "request_timeout": _to_float(adv.request_timeout_var.get(), 30.0),
             "upload_timeout": _to_float(adv.upload_timeout_var.get(), 120.0),

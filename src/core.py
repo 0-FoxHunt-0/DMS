@@ -41,6 +41,7 @@ def send_media_job(
     prepend_enabled: bool = False,
     prepend_text: str = "",
     media_types: Optional[List[str]] = None,
+    ignore_segmentation: bool = False,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -221,7 +222,7 @@ def send_media_job(
     # Determine segmented groups
     from collections import Counter, defaultdict
     counts = Counter(rk for rk, _files in items)
-    segmented_keys = {rk for rk, c in counts.items() if c > 1}
+    segmented_keys = set() if ignore_segmentation else {rk for rk, c in counts.items() if c > 1}
 
     if segment_separators and segmented_keys:
         sent_for_key = defaultdict(int)
