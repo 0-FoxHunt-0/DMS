@@ -2,11 +2,13 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional, Set, Tuple
 
 import requests
+from urllib.parse import unquote
 
 
 DISCORD_API = "https://discord.com/api/v10"
@@ -212,9 +214,15 @@ class DiscordClient:
     @staticmethod
     def _extract_filename_from_url(url: str) -> Optional[str]:
         m = _CDN_FILENAME_RE.search(url)
-        if m:
+        if not m:
+            return None
+        try:
+            fn = unquote(m.group(1))
+            # Normalize to NFC to avoid Unicode equivalence mismatches
+            fn = unicodedata.normalize("NFC", fn)
+            return fn
+        except Exception:
             return m.group(1)
-        return None
 
     def send_message_with_files(self, channel_id: str, files: List[Path], content: Optional[str] = None, timeout: float = 120.0) -> None:
         url = f"{DISCORD_API}/channels/{channel_id}/messages"

@@ -271,6 +271,15 @@ def send_media_job(
                     existing_variants.add(v)
             hits = len(planned_variants & existing_variants)
             _log(f"Dedupe pre-filter: {hits} of {len(planned_names)} filename(s) match local+remote")
+            if hits == 0 and dedupe_logger is not None:
+                try:
+                    # Log a small sample of decoded remote names for debugging
+                    sample_remote = sorted(list(existing_variants))[:10]
+                    dedupe_logger.info(f"[dedupe] sample remote names: {', '.join(sample_remote)}")
+                    sample_planned = sorted(list(planned_variants))[:10]
+                    dedupe_logger.info(f"[dedupe] sample planned names: {', '.join(sample_planned)}")
+                except Exception:
+                    pass
             # Record duplicate names (original basenames, unique)
             dupe_set: set[str] = set()
             for n in planned_names:
