@@ -288,6 +288,11 @@ def send_media_job(
     from collections import Counter, defaultdict
     counts = Counter(rk for rk, _files in items)
     segmented_keys = set() if ignore_segmentation else {rk for rk, c in counts.items() if c > 1}
+    try:
+        if segmented_keys:
+            _log(f"[core] segmented groups detected: {', '.join(sorted(segmented_keys))}")
+    except Exception:
+        pass
 
     if segment_separators and segmented_keys:
         sent_for_key = defaultdict(int)

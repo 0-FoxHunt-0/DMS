@@ -847,31 +847,44 @@ def launch_gui() -> None:
                                             from tkinter import simpledialog
                                             import tkinter as tk
                                             base_name = job_title
-                                            counter = 2
-                                            while True:
-                                                test_name = f"{base_name} ({counter})"
-                                                try:
-                                                    test_thread_id = client.find_existing_thread_by_name(
-                                                        ch_id, test_name, request_timeout=params["request_timeout"], guild_id=_g
-                                                    )
-                                                except Exception as ex:
-                                                    run_pane.log(f"[gui] thread name test failed: {ex}")
-                                                    test_thread_id = None
-                                                if not test_thread_id:
-                                                    break
-                                                counter += 1
+                                            # Prefer base name if available; only number if needed
+                                            try:
+                                                base_exists = client.find_existing_thread_by_name(
+                                                    ch_id, base_name, request_timeout=params["request_timeout"], guild_id=_g
+                                                ) is not None
+                                            except Exception as ex:
+                                                run_pane.log(f"[gui] base name check failed: {ex}")
+                                                base_exists = False
+                                            if not base_exists:
+                                                suggestion = base_name
+                                            else:
+                                                counter = 2
+                                                suggestion = base_name
+                                                while True:
+                                                    test_name = f"{base_name} ({counter})"
+                                                    try:
+                                                        test_thread_id = client.find_existing_thread_by_name(
+                                                            ch_id, test_name, request_timeout=params["request_timeout"], guild_id=_g
+                                                        )
+                                                    except Exception as ex:
+                                                        run_pane.log(f"[gui] thread name test failed: {ex}")
+                                                        test_thread_id = None
+                                                    if not test_thread_id:
+                                                        suggestion = test_name
+                                                        break
+                                                    counter += 1
                                             root_win = tk._default_root
                                             new_title = simpledialog.askstring(
                                                 "New thread title",
-                                                f'Enter new thread title for "{path_to_send.name}" (suggested: "{test_name}"): ',
-                                                initialvalue=test_name,
+                                                f'Enter new thread title for "{path_to_send.name}" (suggested: "{suggestion}"):',
+                                                initialvalue=suggestion,
                                                 parent=root_win,
                                             )
                                             if new_title is None:
                                                 # cancelled; skip this job
                                                 run_pane.log_to(item, "Thread creation cancelled for this group; skipping.")
                                                 continue
-                                            final_title = new_title.strip() or test_name
+                                            final_title = new_title.strip() or suggestion
                                             if job_params.get("prepend_enabled", False) and job_params.get("prepend_text"):
                                                 prepend_text = job_params["prepend_text"]
                                                 if not final_title.startswith(prepend_text):

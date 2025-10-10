@@ -22,9 +22,31 @@ _SEGMENT_PATTERNS = [
 
 
 def _normalize_name(stem: str) -> Tuple[str, Optional[int]]:
+    """Return (root_name, segment_number?) parsed from a filename stem.
+
+    This function is tolerant of trailing bracketed tokens (e.g. hashes)
+    that appear after the segment number, such as:
+    - "video_1 [abcdef]"
+    - "video (2) [xyz]"
+    In such cases the trailing bracket is ignored for segmentation parsing.
+    """
     stem = stem.strip()
+
+    # Remove one or more trailing bracketed tokens: " ... [anything]"
+    # Do not alter the main name other than trimming these tail markers.
+    stem_for_seg = stem
+    try:
+        # Strip repeatedly to handle multiple bracket blocks at end
+        while True:
+            new_val = re.sub(r"\s*\[[^\]]+\]\s*$", "", stem_for_seg)
+            if new_val == stem_for_seg:
+                break
+            stem_for_seg = new_val
+    except Exception:
+        stem_for_seg = stem
+
     for pat in _SEGMENT_PATTERNS:
-        m = pat.match(stem)
+        m = pat.match(stem_for_seg)
         if m:
             root = m.group("root").strip(" .-_")
             try:
