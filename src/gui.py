@@ -852,6 +852,7 @@ def launch_gui() -> None:
                                             elif choice:  # Yes - use existing
                                                 title_holder[0] = title_default
                                                 use_existing_holder[0] = existing_thread_id
+                                                return  # short-circuit: no need to ask for a new title
                                             else:  # No - create new thread
                                                 # Generate unique name
                                                 base_name = title_default

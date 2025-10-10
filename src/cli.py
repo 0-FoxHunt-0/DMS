@@ -14,7 +14,7 @@ from rich.table import Table
 from .discord_client import DiscordClient
 from .scanner import ScanResult, scan_media
 from .core import send_media_job
-from .config import load_env, set_env_var, LOG_DIR
+from .config import load_env, set_env_var
 
 
 load_env()
@@ -148,7 +148,8 @@ def send(
     ignore_segmentation: bool = typer.Option(False, help="Treat all files as non-segmented: no separators, no grouping"),
 ) -> None:
     if log_file is None:
-        default_dir = LOG_DIR
+        # Write logs to a local ./logs directory by default
+        default_dir = Path("logs")
         try:
             default_dir.mkdir(parents=True, exist_ok=True)
         except Exception:

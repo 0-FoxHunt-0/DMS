@@ -340,6 +340,33 @@ class DiscordClient:
         except Exception:
             pass
 
+        # Fallback: paginate archived public beyond first page (best-effort)
+        try:
+            url = f"{DISCORD_API}/channels/{channel_id}/threads/archived/public"
+            before: Optional[str] = None
+            for _ in range(10):
+                params = {"limit": 100}
+                if before:
+                    params["before"] = before
+                resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
+                if resp is None or not (200 <= resp.status_code < 300):
+                    break
+                data = resp.json() if hasattr(resp, 'json') else {}
+                threads = data.get("threads") if isinstance(data, dict) else (data or [])
+                tid = _match_name(threads or [], thread_name)
+                if tid:
+                    return tid
+                # Prepare next page cursor if available
+                try:
+                    if isinstance(threads, list) and threads:
+                        before = threads[-1].get("id")
+                    else:
+                        break
+                except Exception:
+                    break
+        except Exception:
+            pass
+
         logger.info("[threads] lookup end: not found")
         return None
 
