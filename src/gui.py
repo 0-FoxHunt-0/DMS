@@ -224,6 +224,34 @@ class AdvancedOptions(ttk.LabelFrame):
         ttk.Checkbutton(prepend_frame, text="Enable", variable=self.prepend_enabled_var).grid(row=0, column=0, sticky="w")
         ttk.Entry(prepend_frame, textvariable=self.prepend_text_var, width=24).grid(row=0, column=1, sticky="we", padx=(8, 0))
 
+        # Media type selection
+        ttk.Label(self, text="Media types:").grid(row=13, column=0, sticky="w", pady=(6, 0))
+        self.media_all_var = tk.BooleanVar(value=True)
+        self.media_videos_var = tk.BooleanVar(value=False)
+        self.media_gifs_var = tk.BooleanVar(value=False)
+        self.media_images_var = tk.BooleanVar(value=False)
+
+        def _on_all_changed():
+            if self.media_all_var.get():
+                self.media_videos_var.set(False)
+                self.media_gifs_var.set(False)
+                self.media_images_var.set(False)
+
+        def _on_single_changed():
+            # If any non-All is selected, All should be off
+            if self.media_videos_var.get() or self.media_gifs_var.get() or self.media_images_var.get():
+                self.media_all_var.set(False)
+            # If none are selected, default back to All
+            if not (self.media_videos_var.get() or self.media_gifs_var.get() or self.media_images_var.get()):
+                self.media_all_var.set(True)
+
+        media_frame = ttk.Frame(self)
+        media_frame.grid(row=13, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(media_frame, text="All", variable=self.media_all_var, command=_on_all_changed).grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(media_frame, text="Videos", variable=self.media_videos_var, command=_on_single_changed).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Checkbutton(media_frame, text="Gifs", variable=self.media_gifs_var, command=_on_single_changed).grid(row=0, column=2, sticky="w", padx=(8, 0))
+        ttk.Checkbutton(media_frame, text="Images", variable=self.media_images_var, command=_on_single_changed).grid(row=0, column=3, sticky="w", padx=(8, 0))
+
         # Per-job post overrides section (hidden until needed)
         self._per_job_frame = ttk.LabelFrame(self, text="Per-job post fields")
         self._per_job_frame.grid(row=14, column=0, columnspan=3, sticky="we", pady=(8, 0))
@@ -692,6 +720,20 @@ def launch_gui() -> None:
             prepend_text=adv.prepend_text_var.get().strip(),
         )
 
+        # Media types param
+        media_types: list[str] = []
+        if adv.media_all_var.get() or (not adv.media_videos_var.get() and not adv.media_gifs_var.get() and not adv.media_images_var.get()):
+            media_types = ["all"]
+        else:
+            if adv.media_videos_var.get():
+                media_types.append("videos")
+            if adv.media_gifs_var.get():
+                media_types.append("gifs")
+            if adv.media_images_var.get():
+                media_types.append("images")
+        if media_types:
+            params["media_types"] = media_types
+
         run_button.config(state="disabled")
         scram_button.config(state="normal")
 
@@ -1053,6 +1095,11 @@ def launch_gui() -> None:
         adv.relay_dir_var.set(cfg.get("relay_dir", adv.relay_dir_var.get()))
         adv.prepend_enabled_var.set(bool(cfg.get("prepend_enabled", False)))
         adv.prepend_text_var.set(cfg.get("prepend_text", ""))
+        # Restore media type selections
+        adv.media_all_var.set(bool(cfg.get("media_all", True)))
+        adv.media_videos_var.set(bool(cfg.get("media_videos", False)))
+        adv.media_gifs_var.set(bool(cfg.get("media_gifs", False)))
+        adv.media_images_var.set(bool(cfg.get("media_images", False)))
     except Exception:
         pass
 
@@ -1081,6 +1128,11 @@ def launch_gui() -> None:
             "relay_dir": adv.relay_dir_var.get(),
             "prepend_enabled": bool(adv.prepend_enabled_var.get()),
             "prepend_text": adv.prepend_text_var.get(),
+            # Media type selections
+            "media_all": bool(adv.media_all_var.get()),
+            "media_videos": bool(adv.media_videos_var.get()),
+            "media_gifs": bool(adv.media_gifs_var.get()),
+            "media_images": bool(adv.media_images_var.get()),
         }
         base["auto_mode"] = bool(auto_mode_var.get())
         if auto_mode_var.get():

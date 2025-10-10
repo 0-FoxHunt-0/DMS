@@ -10,6 +10,7 @@ from queue import Queue, Empty
 from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
 from .scanner import scan_media
+from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS
 
 
 def send_media_job(
@@ -36,6 +37,7 @@ def send_media_job(
     concurrency: int = 1,
     segment_separators: bool = True,
     separator_text: str = "┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃",
+    media_types: Optional[List[str]] = None,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -139,6 +141,20 @@ def send_media_job(
         scan = scan.filter_against_filenames(existing)
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
 
+    # Determine selected media categories
+    selected = set((mt or '').strip().lower() for mt in (media_types or []))
+    if not selected or 'all' in selected:
+        selected = {'videos', 'gifs', 'images'}
+
+    def _is_ext_selected(ext: str) -> bool:
+        if ext in VIDEO_EXTS:
+            return 'videos' in selected
+        if ext in GIF_EXTS:
+            return 'gifs' in selected
+        if ext in IMAGE_EXTS:
+            return 'images' in selected
+        return False
+
     sent_count = 0
     skipped_oversize = 0
     bytes_limit = int(max_file_mb * 1024 * 1024)
@@ -159,20 +175,31 @@ def send_media_job(
         mp4_ok = pair.mp4_path.stat().st_size <= bytes_limit
         gif_ok = pair.gif_path.stat().st_size <= bytes_limit
         files_to_send: List[Path] = []
-        if mp4_ok or not skip_oversize:
-            files_to_send.append(pair.mp4_path)
+        if _is_ext_selected(pair.mp4_path.suffix.lower()):
+            if mp4_ok or not skip_oversize:
+                files_to_send.append(pair.mp4_path)
+            else:
+                skipped_oversize += 1
         else:
-            skipped_oversize += 1
-        if gif_ok or not skip_oversize:
-            files_to_send.append(pair.gif_path)
+            # Not selected -> skip
+            pass
+        if _is_ext_selected(pair.gif_path.suffix.lower()):
+            if gif_ok or not skip_oversize:
+                files_to_send.append(pair.gif_path)
+            else:
+                skipped_oversize += 1
         else:
-            skipped_oversize += 1
+            # Not selected -> skip
+            pass
         if files_to_send:
             items.append((pair.root_key, files_to_send))
 
     for single in scan.singles:
         if _should_cancel():
             return f"Cancelled after sending {sent_count} file(s)"
+        # Filter by selected categories
+        if not _is_ext_selected(single.path.suffix.lower()):
+            continue
         size_ok = single.path.stat().st_size <= bytes_limit
         if not size_ok and skip_oversize:
             skipped_oversize += 1

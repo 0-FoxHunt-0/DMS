@@ -4,7 +4,13 @@ from pathlib import Path
 from typing import DefaultDict, Dict, Iterable, List, Optional, Set, Tuple
 
 
-MEDIA_EXTS = {".mp4", ".gif"}
+# Media type categories
+VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv"}
+GIF_EXTS = {".gif"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+# Union of all recognized media extensions
+MEDIA_EXTS = VIDEO_EXTS | GIF_EXTS | IMAGE_EXTS
 
 
 _SEGMENT_PATTERNS = [
@@ -75,7 +81,7 @@ def scan_media(root_dir: Path) -> ScanResult:
     pairs: List[PairItem] = []
     singles: List[SingleItem] = []
 
-    # Map: (dir_key, root_name, seg_num) -> {".mp4": Path, ".gif": Path}
+    # Map: (dir_key, root_name, seg_num) -> {ext: Path}
     buckets: Dict[Tuple[str, str, Optional[int]], Dict[str, Path]] = {}
 
     for p in root_dir.rglob("*"):
@@ -109,6 +115,12 @@ def scan_media(root_dir: Path) -> ScanResult:
                 singles.append(SingleItem(root_key=root_key, path=mp4))
             if gif:
                 singles.append(SingleItem(root_key=root_key, path=gif))
+            # Add other recognized media (non-mp4 videos and images) as singles
+            for ext, p in files.items():
+                if ext == ".mp4" or ext == ".gif":
+                    continue
+                if ext in MEDIA_EXTS:
+                    singles.append(SingleItem(root_key=root_key, path=p))
 
     return ScanResult(pairs=pairs, singles=singles)
 
