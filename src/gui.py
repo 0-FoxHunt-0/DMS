@@ -827,9 +827,10 @@ def launch_gui() -> None:
                                             ch_id, title_default, request_timeout=params["request_timeout"]
                                         )
 
+                                        # Resolve a root window reference once for parenting dialogs
+                                        root_win = tk._default_root
                                         if existing_thread_id:
                                             # Thread exists, ask user what to do
-                                            root = tk._default_root  # Get the main window
                                             choice = messagebox.askyesnocancel(
                                                 "Thread exists",
                                                 f'A thread named "{title_default}" already exists.\n\n'
@@ -837,7 +838,7 @@ def launch_gui() -> None:
                                                 "Yes: Upload to existing thread\n"
                                                 "No: Create new thread with different name\n"
                                                 "Cancel: Cancel operation",
-                                                parent=root
+                                                parent=root_win
                                             )
 
                                             if choice is None:  # Cancel
@@ -864,7 +865,7 @@ def launch_gui() -> None:
                                                     "New thread title",
                                                     f'Enter new thread title (suggested: "{test_name}"):',
                                                     initialvalue=test_name,
-                                                    parent=root,
+                                                    parent=root_win,
                                                 )
                                                 final_title = (new_title or "").strip() or test_name
                                                 # Apply prepend text if enabled and user didn't already include it
@@ -880,7 +881,7 @@ def launch_gui() -> None:
                                                 "Thread title",
                                                 "Enter thread title:",
                                                 initialvalue=title_default,
-                                                parent=root,
+                                                parent=root_win,
                                             )
                                             final_title = (t or "").strip() or title_default
                                             # Apply prepend text if enabled and user didn't already include it
