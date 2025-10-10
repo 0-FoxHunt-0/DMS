@@ -488,7 +488,7 @@ def _to_int(s: str, default: int) -> int:
         return default
 
 
-CONFIG_PATH = CONFIG_DIR / "gui_settings.json"
+CONFIG_PATH = CONFIG_DIR / "@.gui_settings.json"
 
 
 def _load_config() -> dict:
