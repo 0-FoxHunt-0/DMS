@@ -103,10 +103,25 @@ class ScanResult:
                 else:
                     base = name_l[:dot]
                     ext = name_l[dot:]
+
+                variants = [name_l]
+
+                # Strip trailing brackets from base
                 stripped = _strip_trailing_brackets_from_stem(base) + ext
                 if stripped != name_l:
-                    return [name_l, stripped]
-                return [name_l]
+                    variants.append(stripped)
+
+                # Also try converting from "hash [hash]" format to "hash_hash" format
+                # This handles the case where local files have brackets but CDN uses underscore
+                bracket_match = re.search(r'^([^[\s]+)\s*\[([^\]]+)\](.*)$', base)
+                if bracket_match:
+                    prefix, bracket_content, suffix = bracket_match.groups()
+                    # If the bracket content matches the prefix, try hash_hash format
+                    if bracket_content.strip() == prefix.strip():
+                        hash_underscore = prefix + "_" + bracket_content + suffix
+                        variants.append(hash_underscore + ext)
+
+                return variants
             except Exception:
                 return [name_l]
 
@@ -120,6 +135,30 @@ class ScanResult:
             gif_name = pair.gif_path.name
             mp4_exists = any(v in existing_l for v in _variants(mp4_name))
             gif_exists = any(v in existing_l for v in _variants(gif_name))
+            if not mp4_exists and not gif_exists:
+                filtered_pairs.append(pair)
+            else:
+                if not mp4_exists:
+                    leftover_singles.append(SingleItem(root_key=pair.root_key, path=pair.mp4_path))
+                if not gif_exists:
+                    leftover_singles.append(SingleItem(root_key=pair.root_key, path=pair.gif_path))
+
+        # Also generate variants for planned names
+        planned_variants: Set[str] = set()
+        for pair in self.pairs:
+            for name in [pair.mp4_path.name, pair.gif_path.name]:
+                for v in _variants(name):
+                    planned_variants.add(v)
+        for single in self.singles:
+            for v in _variants(single.path.name):
+                planned_variants.add(v)
+
+        filtered_pairs: List[PairItem] = []
+        for pair in self.pairs:
+            mp4_variants = set(_variants(pair.mp4_path.name))
+            gif_variants = set(_variants(pair.gif_path.name))
+            mp4_exists = bool(mp4_variants & existing_l)
+            gif_exists = bool(gif_variants & existing_l)
             if not mp4_exists and not gif_exists:
                 filtered_pairs.append(pair)
             else:

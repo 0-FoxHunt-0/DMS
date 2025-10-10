@@ -260,10 +260,12 @@ def send_media_job(
             for single in scan.singles:
                 planned_names.append(single.path.name)
 
+            # Calculate planned variants for diagnostics
             planned_variants: set[str] = set()
             for n in planned_names:
                 for v in _variants(n):
                     planned_variants.add(v)
+
             # Expand existing as well for a fair variant comparison
             existing_variants: set[str] = set()
             for n in existing_set:
