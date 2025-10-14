@@ -157,6 +157,11 @@ def send(
             pass
         log_file = default_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     _setup_logging(log_file)
+    # Derive a per-run directory alongside the log file for JSON artifacts
+    try:
+        run_dir = log_file.parent / log_file.stem
+    except Exception:
+        run_dir = log_file.parent
     rprint(f"[green]Logging to {log_file}[/green]")
     # Best-effort: keep only the last 5 run logs
     _cleanup_old_logs(log_file.parent, keep=5)
@@ -296,6 +301,10 @@ def send(
                     separator_text=separator_text,
                     ignore_segmentation=ignore_segmentation,
                     on_log=_on_log,
+                    confirm_dupe_removal=lambda thread_names: typer.confirm(
+                        f"Would you like to remove detected dupes on ({thread_names})?", default=False
+                    ),
+                    run_dir=run_dir,
                     only_root_level=only_root,
                 )
                 rprint(f"[green]{result}[/green]")
@@ -373,6 +382,7 @@ def send(
         confirm_dupe_removal=lambda thread_names: typer.confirm(
             f"Would you like to remove detected dupes on ({thread_names})?", default=False
         ),
+        run_dir=run_dir,
     )
     rprint(f"[green]{result}[/green]")
 
