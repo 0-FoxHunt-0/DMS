@@ -649,6 +649,14 @@ def send_media_job(
     except Exception:
         pass
 
+    # Persist upload duplicates into dupes.json even when no remote dupes were found
+    try:
+        if not ignore_dedupe and duplicates_detected:
+            # Reuse helper defined above
+            _write_dupes_json(duplicates_detected)  # type: ignore[misc]
+    except Exception:
+        pass
+
     if skipped_oversize:
         _log(f"Finished. Sent {sent_count}, skipped {skipped_oversize} oversize file(s).")
         return f"Done. Sent {sent_count}, skipped {skipped_oversize} oversize file(s)."
