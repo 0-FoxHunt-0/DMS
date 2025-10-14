@@ -245,10 +245,35 @@ def send_media_job(
                     else:
                         base = name_l[:dot]
                         ext = name_l[dot:]
+
+                    variants = [name_l]
+
+                    # Strip trailing brackets from base
                     stripped = _strip_trailing_brackets_from_stem(base) + ext
                     if stripped != name_l:
-                        return [name_l, stripped]
-                    return [name_l]
+                        variants.append(stripped)
+
+                    # Also try converting from "hash [hash]" format to "hash_hash" format
+                    # This handles the case where local files have brackets but CDN uses underscore
+                    bracket_match = re.search(r'^([^[\s]+)\s*\[([^\]]+)\](.*)$', base)
+                    if bracket_match:
+                        prefix, bracket_content, suffix = bracket_match.groups()
+                        # If the bracket content matches the prefix, try hash_hash format
+                        if bracket_content.strip() == prefix.strip():
+                            hash_underscore = prefix + "_" + bracket_content + suffix
+                            variants.append(hash_underscore + ext)
+
+                    # Handle "hash_hash" format (underscores) → "hash [hash]" format (brackets)
+                    # This handles the reverse case where CDN files use underscores but local files use brackets
+                    underscore_match = re.search(r'^([^\s_]+)_([^\s_]+)(.*)$', base)
+                    if underscore_match:
+                        first_hash, second_hash, suffix = underscore_match.groups()
+                        # If both parts are the same hash, try hash [hash] format
+                        if first_hash == second_hash:
+                            hash_brackets = first_hash + " [" + second_hash + "]" + suffix
+                            variants.append(hash_brackets + ext)
+
+                    return variants
                 except Exception:
                     return [name_l]
 
