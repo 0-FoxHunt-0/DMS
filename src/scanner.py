@@ -21,6 +21,83 @@ _SEGMENT_PATTERNS = [
 ]
 
 
+def _strip_trailing_brackets_from_stem(stem: str) -> str:
+    """Strip trailing bracketed tokens from a filename stem."""
+    s = stem
+    try:
+        while True:
+            new_s = re.sub(r"\s*\[[^\]]+\]\s*$", "", s)
+            if new_s == s:
+                break
+            s = new_s
+    except Exception:
+        return stem
+    return s
+
+
+def _variants(name: str) -> List[str]:
+    """Generate filename variants for deduplication matching.
+    
+    Handles various Discord filename transformations:
+    - Lowercase normalization
+    - Trailing bracket removal
+    - hash [hash] <-> hash_hash conversions
+    - Space <-> underscore conversions
+    - Bracket removal (Discord normalization)
+    """
+    name_l = (name or "").lower()
+    try:
+        dot = name_l.rfind('.')
+        if dot <= 0:
+            base = name_l
+            ext = ""
+        else:
+            base = name_l[:dot]
+            ext = name_l[dot:]
+
+        variants = [name_l]
+
+        # Strip trailing brackets from base
+        stripped = _strip_trailing_brackets_from_stem(base) + ext
+        if stripped != name_l:
+            variants.append(stripped)
+
+        # Also try converting from "hash [hash]" format to "hash_hash" format
+        # This handles the case where local files have brackets but CDN uses underscore
+        bracket_match = re.search(r'^([^[\s]+)\s*\[([^\]]+)\](.*)$', base)
+        if bracket_match:
+            prefix, bracket_content, suffix = bracket_match.groups()
+            # If the bracket content matches the prefix, try hash_hash format
+            if bracket_content.strip() == prefix.strip():
+                hash_underscore = prefix + "_" + bracket_content + suffix
+                variants.append(hash_underscore + ext)
+
+        # Handle "hash_hash" format (underscores) → "hash [hash]" format (brackets)
+        # This handles the reverse case where CDN files use underscores but local files use brackets
+        underscore_match = re.search(r'^([^\s_]+)_([^\s_]+)(.*)$', base)
+        if underscore_match:
+            first_hash, second_hash, suffix = underscore_match.groups()
+            # If both parts are the same hash, try hash [hash] format
+            if first_hash == second_hash:
+                hash_brackets = first_hash + " [" + second_hash + "]" + suffix
+                variants.append(hash_brackets + ext)
+
+        # Discord filename normalization: spaces -> underscores, remove brackets
+        # This handles files like "Name With Spaces [tag].mp4" -> "Name_With_Spaces_tag.mp4"
+        discord_normalized = base.replace(' ', '_').replace('[', '').replace(']', '') + ext
+        if discord_normalized != name_l:
+            variants.append(discord_normalized)
+
+        # Reverse: underscores -> spaces (for matching Discord files against local files with spaces)
+        space_variant = base.replace('_', ' ') + ext
+        if space_variant != name_l:
+            variants.append(space_variant)
+
+        return variants
+    except Exception:
+        return [name_l]
+
+
 def _normalize_name(stem: str) -> Tuple[str, Optional[int]]:
     """Return (root_name, segment_number?) parsed from a filename stem.
 
@@ -77,75 +154,18 @@ class ScanResult:
     singles: List[SingleItem]
 
     def filter_against_filenames(self, existing: Set[str]) -> "ScanResult":
+        """Filter out files that already exist based on filename variants.
+        
+        Args:
+            existing: Set of existing filenames (typically from Discord)
+            
+        Returns:
+            New ScanResult with duplicates filtered out
+        """
         filtered_pairs: List[PairItem] = []
         leftover_singles: List[SingleItem] = []
 
-        # Normalize existing names to lowercase and also include bracket-stripped variants
-        def _strip_trailing_brackets_from_stem(stem: str) -> str:
-            s = stem
-            try:
-                while True:
-                    new_s = re.sub(r"\s*\[[^\]]+\]\s*$", "", s)
-                    if new_s == s:
-                        break
-                    s = new_s
-            except Exception:
-                return stem
-            return s
-
-        def _variants(name: str) -> List[str]:
-            name_l = (name or "").lower()
-            try:
-                dot = name_l.rfind('.')
-                if dot <= 0:
-                    base = name_l
-                    ext = ""
-                else:
-                    base = name_l[:dot]
-                    ext = name_l[dot:]
-
-                variants = [name_l]
-
-                # Strip trailing brackets from base
-                stripped = _strip_trailing_brackets_from_stem(base) + ext
-                if stripped != name_l:
-                    variants.append(stripped)
-
-                # Also try converting from "hash [hash]" format to "hash_hash" format
-                # This handles the case where local files have brackets but CDN uses underscore
-                bracket_match = re.search(r'^([^[\s]+)\s*\[([^\]]+)\](.*)$', base)
-                if bracket_match:
-                    prefix, bracket_content, suffix = bracket_match.groups()
-                    # If the bracket content matches the prefix, try hash_hash format
-                    if bracket_content.strip() == prefix.strip():
-                        hash_underscore = prefix + "_" + bracket_content + suffix
-                        variants.append(hash_underscore + ext)
-
-                # Handle "hash_hash" format (underscores) → "hash [hash]" format (brackets)
-                # This handles the reverse case where CDN files use underscores but local files use brackets
-                underscore_match = re.search(r'^([^\s_]+)_([^\s_]+)(.*)$', base)
-                if underscore_match:
-                    first_hash, second_hash, suffix = underscore_match.groups()
-                    # If both parts are the same hash, try hash [hash] format
-                    if first_hash == second_hash:
-                        hash_brackets = first_hash + " [" + second_hash + "]" + suffix
-                        variants.append(hash_brackets + ext)
-
-                # Discord filename normalization: spaces -> underscores, remove brackets
-                # This handles files like "Name With Spaces [tag].mp4" -> "Name_With_Spaces_tag.mp4"
-                discord_normalized = base.replace(' ', '_').replace('[', '').replace(']', '') + ext
-                if discord_normalized != name_l:
-                    variants.append(discord_normalized)
-
-                # Reverse: underscores -> spaces (for matching Discord files against local files with spaces)
-                space_variant = base.replace('_', ' ') + ext
-                if space_variant != name_l:
-                    variants.append(space_variant)
-
-                return variants
-            except Exception:
-                return [name_l]
-
+        # Build set of all existing filename variants
         existing_l: Set[str] = set()
         for n in existing:
             for v in _variants(n):
@@ -192,6 +212,58 @@ class ScanResult:
         filtered_singles.extend(leftover_singles)
 
         return ScanResult(pairs=filtered_pairs, singles=filtered_singles)
+
+    def get_dedupe_diagnostics(self, existing_set: Set[str]) -> dict:
+        """Generate deduplication diagnostics for logging.
+        
+        Args:
+            existing_set: Set of existing filenames from remote source
+            
+        Returns:
+            Dictionary with diagnostic information:
+            - planned_names: List of all planned filenames
+            - planned_variants: Set of all planned filename variants
+            - existing_variants: Set of all existing filename variants
+            - hits: Number of matches between planned and existing
+            - duplicates: List of duplicate filenames detected
+        """
+        # Build the set of candidate names from the scan
+        planned_names: List[str] = []
+        for pair in self.pairs:
+            planned_names.append(pair.mp4_path.name)
+            planned_names.append(pair.gif_path.name)
+        for single in self.singles:
+            planned_names.append(single.path.name)
+
+        # Calculate planned variants
+        planned_variants: Set[str] = set()
+        for n in planned_names:
+            for v in _variants(n):
+                planned_variants.add(v)
+
+        # Expand existing as well for a fair variant comparison
+        existing_variants: Set[str] = set()
+        for n in existing_set:
+            for v in _variants(n):
+                existing_variants.add(v)
+        
+        hits = len(planned_variants & existing_variants)
+        
+        # Record duplicate names (original basenames, unique)
+        dupe_set: Set[str] = set()
+        for n in planned_names:
+            vs = _variants(n)
+            if any(v in existing_variants for v in vs):
+                dupe_set.add(n)
+        duplicates = sorted(dupe_set)
+        
+        return {
+            "planned_names": planned_names,
+            "planned_variants": planned_variants,
+            "existing_variants": existing_variants,
+            "hits": hits,
+            "duplicates": duplicates,
+        }
 
 
 def scan_media(root_dir: Path) -> ScanResult:

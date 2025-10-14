@@ -10,7 +10,7 @@ from queue import Queue, Empty
 
 from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
-from .scanner import scan_media
+from .scanner import scan_media, _variants
 from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
 from .logging_utils import start_thread_log, sanitize_for_filename
 
@@ -221,93 +221,15 @@ def send_media_job(
         except Exception:
             pass
 
-        # Diagnostics: measure how many planned filenames would match dedupe set
+        # Get deduplication diagnostics from scanner
         try:
-            def _strip_trailing_brackets_from_stem(stem: str) -> str:
-                s = stem
-                try:
-                    while True:
-                        new_s = re.sub(r"\s*\[[^\]]+\]\s*$", "", s)
-                        if new_s == s:
-                            break
-                        s = new_s
-                except Exception:
-                    return stem
-                return s
-
-            def _variants(name: str) -> List[str]:
-                name_l = (name or "").lower()
-                try:
-                    dot = name_l.rfind('.')
-                    if dot <= 0:
-                        base = name_l
-                        ext = ""
-                    else:
-                        base = name_l[:dot]
-                        ext = name_l[dot:]
-
-                    variants = [name_l]
-
-                    # Strip trailing brackets from base
-                    stripped = _strip_trailing_brackets_from_stem(base) + ext
-                    if stripped != name_l:
-                        variants.append(stripped)
-
-                    # Also try converting from "hash [hash]" format to "hash_hash" format
-                    # This handles the case where local files have brackets but CDN uses underscore
-                    bracket_match = re.search(r'^([^[\s]+)\s*\[([^\]]+)\](.*)$', base)
-                    if bracket_match:
-                        prefix, bracket_content, suffix = bracket_match.groups()
-                        # If the bracket content matches the prefix, try hash_hash format
-                        if bracket_content.strip() == prefix.strip():
-                            hash_underscore = prefix + "_" + bracket_content + suffix
-                            variants.append(hash_underscore + ext)
-
-                    # Handle "hash_hash" format (underscores) → "hash [hash]" format (brackets)
-                    # This handles the reverse case where CDN files use underscores but local files use brackets
-                    underscore_match = re.search(r'^([^\s_]+)_([^\s_]+)(.*)$', base)
-                    if underscore_match:
-                        first_hash, second_hash, suffix = underscore_match.groups()
-                        # If both parts are the same hash, try hash [hash] format
-                        if first_hash == second_hash:
-                            hash_brackets = first_hash + " [" + second_hash + "]" + suffix
-                            variants.append(hash_brackets + ext)
-
-                    # Discord filename normalization: spaces -> underscores, remove brackets
-                    # This handles files like "Name With Spaces [tag].mp4" -> "Name_With_Spaces_tag.mp4"
-                    discord_normalized = base.replace(' ', '_').replace('[', '').replace(']', '') + ext
-                    if discord_normalized != name_l:
-                        variants.append(discord_normalized)
-
-                    # Reverse: underscores -> spaces (for matching Discord files against local files with spaces)
-                    space_variant = base.replace('_', ' ') + ext
-                    if space_variant != name_l:
-                        variants.append(space_variant)
-
-                    return variants
-                except Exception:
-                    return [name_l]
-
-            # Build the set of candidate names from the scan
-            planned_names: List[str] = []
-            for pair in scan.pairs:
-                planned_names.append(pair.mp4_path.name)
-                planned_names.append(pair.gif_path.name)
-            for single in scan.singles:
-                planned_names.append(single.path.name)
-
-            # Calculate planned variants for diagnostics
-            planned_variants: set[str] = set()
-            for n in planned_names:
-                for v in _variants(n):
-                    planned_variants.add(v)
-
-            # Expand existing as well for a fair variant comparison
-            existing_variants: set[str] = set()
-            for n in existing_set:
-                for v in _variants(n):
-                    existing_variants.add(v)
-            hits = len(planned_variants & existing_variants)
+            diagnostics = scan.get_dedupe_diagnostics(existing_set)
+            planned_names = diagnostics["planned_names"]
+            planned_variants = diagnostics["planned_variants"]
+            existing_variants = diagnostics["existing_variants"]
+            hits = diagnostics["hits"]
+            duplicates_detected = diagnostics["duplicates"]
+            
             _log(f"Dedupe pre-filter: {hits} of {len(planned_names)} filename(s) match local+remote")
             if hits == 0 and dedupe_logger is not None:
                 try:
@@ -318,13 +240,6 @@ def send_media_job(
                     dedupe_logger.info(f"[dedupe] sample planned names: {', '.join(sample_planned)}")
                 except Exception:
                     pass
-            # Record duplicate names (original basenames, unique)
-            dupe_set: set[str] = set()
-            for n in planned_names:
-                vs = _variants(n)
-                if any(v in existing_variants for v in vs):
-                    dupe_set.add(n)
-            duplicates_detected = sorted(dupe_set)
             if dedupe_logger is not None:
                 try:
                     dedupe_logger.info(f"[dedupe] planned={len(planned_names)} hits={len(duplicates_detected)}")
