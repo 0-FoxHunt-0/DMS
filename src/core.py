@@ -273,6 +273,17 @@ def send_media_job(
                             hash_brackets = first_hash + " [" + second_hash + "]" + suffix
                             variants.append(hash_brackets + ext)
 
+                    # Discord filename normalization: spaces -> underscores, remove brackets
+                    # This handles files like "Name With Spaces [tag].mp4" -> "Name_With_Spaces_tag.mp4"
+                    discord_normalized = base.replace(' ', '_').replace('[', '').replace(']', '') + ext
+                    if discord_normalized != name_l:
+                        variants.append(discord_normalized)
+
+                    # Reverse: underscores -> spaces (for matching Discord files against local files with spaces)
+                    space_variant = base.replace('_', ' ') + ext
+                    if space_variant != name_l:
+                        variants.append(space_variant)
+
                     return variants
                 except Exception:
                     return [name_l]
