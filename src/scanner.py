@@ -82,9 +82,13 @@ def _variants(name: str) -> List[str]:
                 hash_brackets = first_hash + " [" + second_hash + "]" + suffix
                 variants.append(hash_brackets + ext)
 
-        # Discord filename normalization: spaces -> underscores, remove brackets
-        # This handles files like "Name With Spaces [tag].mp4" -> "Name_With_Spaces_tag.mp4"
-        discord_normalized = base.replace(' ', '_').replace('[', '').replace(']', '') + ext
+        # Discord filename normalization: spaces -> underscores, remove all special characters
+        # This handles files like "Dance to the Rhythm (Moikaloop) [tag].mp4" -> "Dance_to_the_Rhythm_Moikaloop_tag.mp4"
+        # Discord removes: () [] {} ! @ # $ % ^ & * + = | \ : ; " ' < > ? , and other special chars
+        discord_normalized = base.replace(' ', '_')
+        # Remove all special characters that Discord sanitizes in URLs
+        discord_normalized = re.sub(r'[(){}\[\]!@#$%^&*+=|\\:;"\'<>?,`~]', '', discord_normalized)
+        discord_normalized = discord_normalized + ext
         if discord_normalized != name_l:
             variants.append(discord_normalized)
 
