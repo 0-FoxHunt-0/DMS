@@ -370,6 +370,9 @@ def send(
         separator_text=separator_text,
         ignore_segmentation=ignore_segmentation,
         on_log=_on_log,
+        confirm_dupe_removal=lambda thread_names: typer.confirm(
+            f"Would you like to remove detected dupes on ({thread_names})?", default=False
+        ),
     )
     rprint(f"[green]{result}[/green]")
 

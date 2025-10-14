@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import DefaultDict, Dict, Iterable, List, Optional, Set, Tuple
 import sys
+import json
 
 
 # Media type categories
@@ -482,4 +483,141 @@ def suggest_thread_title_for_subdir(dir_path: Path) -> str:
         pass
     return name
 
+
+
+# --- Remote duplicate detection models and helpers ---
+@dataclass(frozen=True)
+class DupeMessage:
+    id: str
+    timestamp: str
+    filenames: List[str]
+    embed_urls: List[str]
+
+
+@dataclass(frozen=True)
+class DupeGroup:
+    filename: str  # normalized exact filename key
+    messages: List[DupeMessage]
+    planned_match: bool  # whether this filename exists in planned ScanResult names
+
+
+@dataclass(frozen=True)
+class DupeReport:
+    thread_id: str
+    thread_name: Optional[str]
+    groups: List[DupeGroup]
+
+
+_URL_FILENAME_RE = re.compile(
+    r"/([^/?#]+\.(?:mp4|gif|png|jpe?g|webp|mov|webm|mkv))(?:\?|$)", re.IGNORECASE
+)
+
+
+def _extract_filename_from_url_local(url: str) -> Optional[str]:
+    m = _URL_FILENAME_RE.search(url or "")
+    if not m:
+        return None
+    try:
+        from urllib.parse import unquote
+        import unicodedata as _un
+        fn = unquote(m.group(1))
+        fn = _un.normalize("NFC", fn)
+        return fn
+    except Exception:
+        return m.group(1)
+
+
+def _planned_exact_names(scan: ScanResult) -> Set[str]:
+    names: Set[str] = set()
+    for p in scan.pairs:
+        names.add(p.mp4_path.name.lower())
+        names.add(p.gif_path.name.lower())
+    for s in scan.singles:
+        names.add(s.path.name.lower())
+    return names
+
+
+def detect_remote_duplicates(
+    client: "DiscordClient",  # type: ignore[name-defined]
+    channel_id: str,
+    planned: ScanResult,
+    *,
+    max_messages: int = 1000,
+    request_timeout: float = 30.0,
+) -> DupeReport:
+    """Detect duplicate media already present in the remote thread/channel.
+
+    Duplicates are defined by exact match on the normalized filename extracted from
+    attachment filename fields or media URLs in embeds. Two or more distinct messages
+    containing the same filename constitute a duplicate group. When deleting, the
+    oldest message is kept and newer ones are removed.
+    """
+    try:
+        # Avoid import cycle by local import
+        from .discord_client import DiscordClient as _DC  # type: ignore
+    except Exception:
+        _DC = None  # type: ignore
+    # Fetch thread name if possible
+    thread_name: Optional[str] = None
+    try:
+        ch = client.get_channel(channel_id, request_timeout=request_timeout)
+        if isinstance(ch, dict):
+            thread_name = ch.get("name") or None
+    except Exception:
+        thread_name = None
+
+    # Collect messages with media
+    try:
+        messages = client.list_messages_with_media(channel_id, max_messages=max_messages, request_timeout=request_timeout)
+    except Exception:
+        messages = []
+
+    # Index by filename (lowercased)
+    from collections import defaultdict
+    fname_to_msgs: Dict[str, List[DupeMessage]] = defaultdict(list)
+    for msg in messages:
+        try:
+            mid = str(msg.get("id"))
+            ts = str(msg.get("timestamp") or "")
+            att_files: List[str] = []
+            for att in msg.get("attachments", []) or []:
+                fn = att.get("filename")
+                if isinstance(fn, str) and fn:
+                    att_files.append(fn)
+            embed_urls: List[str] = list(msg.get("embed_urls", []) or [])
+            filenames: Set[str] = set()
+            for fn in att_files:
+                filenames.add(fn)
+            for u in embed_urls:
+                fn2 = _extract_filename_from_url_local(u)
+                if fn2:
+                    filenames.add(fn2)
+            if not filenames:
+                continue
+            dm = DupeMessage(id=mid, timestamp=ts, filenames=sorted({f for f in filenames}), embed_urls=list(embed_urls))
+            for fn in filenames:
+                key = fn.lower()
+                fname_to_msgs[key].append(dm)
+        except Exception:
+            continue
+
+    planned_names_l = _planned_exact_names(planned)
+    groups: List[DupeGroup] = []
+    for fname_l, msgs in fname_to_msgs.items():
+        # Duplicate only if 2+ distinct message IDs
+        try:
+            unique_ids = {m.id for m in msgs}
+        except Exception:
+            unique_ids = set()
+        if len(unique_ids) >= 2:
+            # planned match?
+            planned_match = fname_l in planned_names_l
+            # Stable sort by timestamp string
+            try:
+                msgs_sorted = sorted(msgs, key=lambda m: m.timestamp or "")
+            except Exception:
+                msgs_sorted = list(msgs)
+            groups.append(DupeGroup(filename=fname_l, messages=msgs_sorted, planned_match=planned_match))
+
+    return DupeReport(thread_id=channel_id, thread_name=thread_name, groups=groups)
 

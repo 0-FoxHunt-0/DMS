@@ -920,6 +920,11 @@ def launch_gui() -> None:
                                         on_log=make_logger(item),
                                         logger=job_logger,  # type: ignore[arg-type]
                                         run_dir=run_dir,
+                                        confirm_dupe_removal=lambda thread_names: messagebox.askyesno(
+                                            "Remove duplicates?",
+                                            f"Would you like to remove detected dupes on ({thread_names})?",
+                                            parent=root,
+                                        ),
                                     ))
                                 future_to_item = {fut: itm for fut, itm in zip(futures, per_job_items)}
                                 for f in as_completed(futures):
@@ -1075,6 +1080,11 @@ def launch_gui() -> None:
                                     on_log=make_logger(item),
                                     logger=job_logger,  # type: ignore[arg-type]
                                     run_dir=run_dir,
+                                    confirm_dupe_removal=lambda thread_names: messagebox.askyesno(
+                                        "Remove duplicates?",
+                                        f"Would you like to remove detected dupes on ({thread_names})?",
+                                        parent=root,
+                                    ),
                                 )
                                 run_pane.log_to(item, f"Done: {result}")
                             except Exception as e:
@@ -1160,6 +1170,11 @@ def launch_gui() -> None:
                         logger=job_logger,  # type: ignore[arg-type]
                         run_dir=run_dir,
                         on_thread_created=make_on_thread_created(idx, item, p.name),
+                        confirm_dupe_removal=lambda thread_names: messagebox.askyesno(
+                            "Remove duplicates?",
+                            f"Would you like to remove detected dupes on ({thread_names})?",
+                            parent=root,
+                        ),
                     ))
                 # Map futures to their corresponding UI panels to avoid index mismatches
                 future_to_item = {fut: itm for fut, itm in zip(futures, per_job_items)}

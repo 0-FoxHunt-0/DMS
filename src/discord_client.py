@@ -476,6 +476,85 @@ def _unique_path(dest_dir: Path, filename: str) -> Path:
 
 
 class DiscordClient(DiscordClient):
+    def list_messages_with_media(
+        self,
+        channel_id: str,
+        max_messages: int = 1000,
+        request_timeout: float = 30.0,
+    ) -> List[dict]:
+        """Return a list of messages containing media (attachments or embeds).
+
+        Each entry contains: id, timestamp, attachments (list of {filename,url}), embed_urls (list[str]).
+        """
+        results: List[dict] = []
+        url = f"{DISCORD_API}/channels/{channel_id}/messages"
+        params = {"limit": 100}
+        last_id: Optional[str] = None
+        fetched = 0
+
+        while fetched < max_messages:
+            if last_id:
+                params["before"] = last_id
+            resp = self._request_with_retries("GET", url, params=params, timeout=request_timeout)
+            if resp is None:
+                break
+            if resp.status_code in (401, 403):
+                raise DiscordAuthError(f"Discord list_messages_with_media unauthorized: {resp.status_code}")
+            try:
+                messages = resp.json()
+            except Exception:
+                break
+            if not isinstance(messages, list) or not messages:
+                break
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                att_list = []
+                for att in msg.get("attachments", []) or []:
+                    if not isinstance(att, dict):
+                        continue
+                    fn = att.get("filename")
+                    u = att.get("url")
+                    if fn or u:
+                        att_list.append({"filename": fn, "url": u})
+                embed_urls: List[str] = []
+                for emb in msg.get("embeds", []) or []:
+                    if not isinstance(emb, dict):
+                        continue
+                    url_fields = [
+                        emb.get("url"),
+                        (emb.get("thumbnail", {}) or {}).get("url"),
+                        (emb.get("video", {}) or {}).get("url"),
+                        (emb.get("image", {}) or {}).get("url"),
+                    ]
+                    for u in url_fields:
+                        if u:
+                            embed_urls.append(u)
+                if att_list or embed_urls:
+                    results.append({
+                        "id": msg.get("id"),
+                        "timestamp": msg.get("timestamp"),
+                        "attachments": att_list,
+                        "embed_urls": embed_urls,
+                    })
+            fetched += len(messages)
+            try:
+                last_id = messages[-1]["id"]
+            except Exception:
+                break
+
+        return results
+
+    def delete_message(self, channel_id: str, message_id: str, request_timeout: float = 30.0) -> bool:
+        """Delete a message. Returns True on success."""
+        url = f"{DISCORD_API}/channels/{channel_id}/messages/{message_id}"
+        resp = self._request_with_retries("DELETE", url, timeout=request_timeout)
+        if resp is None:
+            return False
+        if resp.status_code in (401, 403):
+            raise DiscordAuthError(f"Discord delete_message unauthorized: {resp.status_code}")
+        # Discord returns 204 No Content on success
+        return 200 <= resp.status_code < 300
     def collect_media_items(
         self,
         channel_id: str,

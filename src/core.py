@@ -5,6 +5,7 @@ import re
 import time
 from pathlib import Path
 from typing import Optional, Tuple, List, Set
+import json
 import threading
 from queue import Queue, Empty
 
@@ -12,6 +13,7 @@ from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
 from .scanner import scan_media, _variants
 from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
+from .scanner import detect_remote_duplicates
 from .logging_utils import start_thread_log, sanitize_for_filename
 
 
@@ -47,6 +49,7 @@ def send_media_job(
     only_root_level: bool = False,
     logger: Optional[logging.Logger] = None,
     run_dir: Optional[Path] = None,
+    confirm_dupe_removal: Optional[callable] = None,
 ) -> str:
     """Headless job used by GUI to perform a single send operation.
 
@@ -195,6 +198,8 @@ def send_media_job(
     scan = scan_media(input_dir)
     # Track duplicates detected for end-of-run summary
     duplicates_detected: List[str] = []
+    # Track remote dupe report for JSON/prompt
+    remote_dupe_report = None
 
     if not ignore_dedupe:
         _log("Fetching recent filenames for dedupe...")
@@ -268,6 +273,118 @@ def send_media_job(
                     pass
         except Exception:
             pass
+    # Detect remote duplicates in the destination thread/channel
+    try:
+        remote_dupe_report = detect_remote_duplicates(
+            client, target_channel_id, scan, max_messages=history_limit, request_timeout=request_timeout
+        )
+    except Exception as e:
+        remote_dupe_report = None
+        try:
+            _log(f"Warning: remote dupe detection failed: {e}")
+        except Exception:
+            pass
+
+    # If remote dupes exist, write dupes.json entry and prompt for removal
+    def _write_dupes_json(upload_dupes_list: List[str]) -> None:
+        try:
+            base_dir = run_dir or Path("logs")
+            base_dir.mkdir(parents=True, exist_ok=True)
+            fp = base_dir / "dupes.json"
+            existing: dict = {}
+            if fp.exists():
+                try:
+                    with fp.open("r", encoding="utf-8") as f:
+                        existing = json.load(f) or {}
+                except Exception:
+                    existing = {}
+            remote_list = existing.get("remote_dupes") or []
+            upload_list = existing.get("upload_dupes") or []
+            # Prepare remote entry (if any)
+            if remote_dupe_report is not None and getattr(remote_dupe_report, "groups", None):
+                rem_entry = {
+                    "thread_id": remote_dupe_report.thread_id,
+                    "thread_name": remote_dupe_report.thread_name,
+                    "groups": [
+                        {
+                            "filename": g.filename,
+                            "keep": (g.messages[0].id if g.messages else None),
+                            "to_delete": [m.id for m in (g.messages[1:] if len(g.messages) > 1 else [])],
+                            "messages": [
+                                {
+                                    "id": m.id,
+                                    "timestamp": m.timestamp,
+                                    "filenames": m.filenames,
+                                    "embed_urls": m.embed_urls,
+                                }
+                                for m in g.messages
+                            ],
+                        }
+                        for g in remote_dupe_report.groups
+                    ],
+                }
+                remote_list.append(rem_entry)
+            # Prepare upload entry (if any)
+            if upload_dupes_list:
+                upl_entry = {
+                    "thread_id": remote_dupe_report.thread_id if remote_dupe_report else target_channel_id,
+                    "thread_name": (remote_dupe_report.thread_name if remote_dupe_report else None),
+                    "duplicates": sorted(list(set(upload_dupes_list))),
+                }
+                upload_list.append(upl_entry)
+            data = {"remote_dupes": remote_list, "upload_dupes": upload_list}
+            with fp.open("w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    # If we found any remote dupes, notify and optionally delete
+    if remote_dupe_report is not None and remote_dupe_report.groups:
+        # Write JSON record including current upload_dupes (if computed already)
+        _write_dupes_json(duplicates_detected)
+        thread_display = remote_dupe_report.thread_name or str(target_channel_id)
+        _log(f"Duped files have been detected in ({thread_display})\nPlease refer to the logs for the list")
+        do_delete = False
+        try:
+            if callable(confirm_dupe_removal):
+                do_delete = bool(confirm_dupe_removal(thread_display))
+        except Exception:
+            do_delete = False
+        if do_delete:
+            # Delete all but oldest per group
+            deleted = 0
+            for g in remote_dupe_report.groups:
+                if not g.messages or len(g.messages) < 2:
+                    continue
+                for m in g.messages[1:]:
+                    try:
+                        if client.delete_message(target_channel_id, m.id, request_timeout=request_timeout):
+                            deleted += 1
+                    except DiscordAuthError as e:
+                        _log(f"Authentication error during dupe deletion: {e}")
+                        return "Aborted: authentication failed (401/403)"
+                    except Exception as e:
+                        _log(f"Warning: failed to delete message {m.id}: {e}")
+            _log(f"Deleted {deleted} duplicate message(s) on remote (kept oldest per file).")
+            # After deletion, refresh dedupe sets and re-filter from original scan
+            try:
+                if not ignore_dedupe:
+                    remote_existing2 = client.fetch_existing_filenames(
+                        target_channel_id, max_messages=history_limit, request_timeout=request_timeout
+                    )
+                    existing_expanded2: Set[str] = set()
+                    for n in remote_existing2:
+                        for v in _variants(n):
+                            existing_expanded2.add(v)
+                    # Re-run from the original pre-filter scan (if available)
+                    try:
+                        scan = scan_before.filter_against_filenames(existing_expanded2)  # type: ignore[name-defined]
+                    except Exception:
+                        # If scan_before not defined (ignore_dedupe True earlier), keep current scan
+                        pass
+            except Exception as e:
+                _log(f"Warning: failed to refresh dedupe after deletion: {e}")
+
     _log(f"Found {len(scan.pairs)} pair(s) and {len(scan.singles)} single(s) after dedupe.")
     _log(f"[core] uploads target channel/thread id={target_channel_id}")
 
@@ -523,13 +640,11 @@ def send_media_job(
         if worker_errors:
             return "Aborted: authentication failed (401/403)"
 
-    # Emit end-of-run dedupe summary to dedicated log file
+    # Emit end-of-run dedupe summary counts only (details recorded in dupes.json)
     try:
         if dedupe_logger is not None and not ignore_dedupe:
             dedupe_logger.info("[dedupe] summary start")
             dedupe_logger.info(f"[dedupe] duplicates detected: count={len(duplicates_detected)}")
-            for name in duplicates_detected:
-                dedupe_logger.info(f"[dedupe] dup: {name}")
             dedupe_logger.info("[dedupe] summary end")
     except Exception:
         pass
