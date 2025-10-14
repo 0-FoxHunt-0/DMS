@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Set
 import threading
 from queue import Queue, Empty
 
@@ -324,7 +324,12 @@ def send_media_job(
 
         # Apply filter
         scan_before = scan
-        scan = scan.filter_against_filenames(existing_set)
+        # Expand existing_set to include all variants before filtering
+        existing_expanded: Set[str] = set()
+        for n in existing_set:
+            for v in _variants(n):
+                existing_expanded.add(v)
+        scan = scan.filter_against_filenames(existing_expanded)
         try:
             before_count = len(scan_before.pairs) * 2 + len(scan_before.singles)
             after_count = len(scan.pairs) * 2 + len(scan.singles)
