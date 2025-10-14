@@ -1210,6 +1210,9 @@ def launch_gui() -> None:
             auto_root = cfg.get("auto_root") or ""
             auto_url = cfg.get("auto_url") or ""
             auto_view.set_values(auto_root, auto_url)
+            # Restore send_as_one setting
+            send_as_one = cfg.get("send_as_one", True)  # Default to True to match current behavior
+            auto_view.send_as_one_var.set(send_as_one)
         else:
             jobs = cfg.get("jobs") or []
             if isinstance(jobs, list):
@@ -1289,6 +1292,7 @@ def launch_gui() -> None:
             root_dir, auto_url = auto_view.get_values()
             base["auto_root"] = str(root_dir or "")
             base["auto_url"] = auto_url
+            base["send_as_one"] = bool(auto_view.get_send_as_one())
         return base
 
     # Track worker thread for graceful shutdown
