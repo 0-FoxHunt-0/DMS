@@ -58,6 +58,25 @@ def _variants(name: str) -> List[str]:
 
         variants = [name_l]
 
+        # Normalize to ASCII: remove diacritics and curly punctuation
+        try:
+            import unicodedata as _un
+            base_ascii = _un.normalize("NFKD", base)
+            base_ascii = base_ascii.encode("ascii", "ignore").decode("ascii")
+        except Exception:
+            base_ascii = base
+
+        def _sanitize_discord_base(s: str) -> str:
+            # spaces -> underscores
+            s = s.replace(' ', '_')
+            # remove all special/punctuation chars (keep underscores and dots here for structure)
+            s = re.sub(r'[(){}\[\]!@#$%^&*+=|\\:;"\'<>?,`~]', '', s)
+            # collapse multiple underscores
+            s = re.sub(r'_+', '_', s)
+            # trim leading/trailing underscores or dots
+            s = s.strip('_.')
+            return s
+
         # Strip trailing brackets from base
         stripped = _strip_trailing_brackets_from_stem(base) + ext
         if stripped != name_l:
@@ -86,29 +105,25 @@ def _variants(name: str) -> List[str]:
         # Discord filename normalization: spaces -> underscores, remove all special characters
         # This handles files like "Dance to the Rhythm (Moikaloop) [tag].mp4" -> "Dance_to_the_Rhythm_Moikaloop_tag.mp4"
         # Discord removes: () [] {} ! @ # $ % ^ & * + = | \ : ; " ' < > ? , and other special chars
-        discord_normalized = base.replace(' ', '_')
-        # Remove all special characters that Discord sanitizes in URLs
-        discord_normalized = re.sub(r'[(){}\[\]!@#$%^&*+=|\\:;"\'<>?,`~]', '', discord_normalized)
-        discord_normalized = discord_normalized + ext
+        discord_normalized = _sanitize_discord_base(base_ascii) + ext
         if discord_normalized != name_l:
             variants.append(discord_normalized)
 
         # Also try removing brackets and normalizing the tag part separately
         # This handles cases like "Shadowheart's True Feelings [speedybuzzingorangutan]" -> "Shadowhearts_True_Feelings_speedybuzzingorangutan"
-        bracket_match = re.search(r'^(.+?)\s*\[([^\]]+)\](.*)$', base)
+        bracket_match = re.search(r'^(.+?)\s*\[([^\]]+)\](.*)$', base_ascii)
         if bracket_match:
             prefix, bracket_content, suffix = bracket_match.groups()
-            # Normalize prefix: remove apostrophes and other special chars, replace spaces with underscores
-            normalized_prefix = re.sub(r'[\'(){}\[\]!@#$%^&*+=|\\:;"<>?,`~]', '', prefix.replace(' ', '_'))
-            # The bracket content (tag) should already be normalized
-            normalized_tag = bracket_content
+            # Normalize prefix and tag using the same sanitizer
+            normalized_prefix = _sanitize_discord_base(prefix)
+            normalized_tag = _sanitize_discord_base(bracket_content)
             # Try both with and without underscore between prefix and tag
-            variants_to_try = [
-                normalized_prefix + '_' + normalized_tag + suffix,
-                normalized_prefix + normalized_tag + suffix,
-            ]
+            variants_to_try = []
+            for joiner in ['_', '']:
+                combined = normalized_prefix + joiner + normalized_tag + suffix
+                variants_to_try.append(combined)
             for combined in variants_to_try:
-                combined_normalized = re.sub(r'[(){}\[\]!@#$%^&*+=|\\:;"\'<>?,`~]', '', combined)
+                combined_normalized = _sanitize_discord_base(combined)
                 tag_variant = combined_normalized + ext
                 if tag_variant != name_l:
                     variants.append(tag_variant)

@@ -66,3 +66,6 @@ ehthumbs.db
 logs/
 *.log
 gui_settings.json
+
+# Cursor specific
+.cursor/
