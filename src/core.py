@@ -274,9 +274,10 @@ def send_media_job(
         except Exception:
             pass
     # Detect remote duplicates in the destination thread/channel
+    # Pass unfiltered scan (scan_before) so detection sees all planned files, not just those remaining after upload dedupe
     try:
         remote_dupe_report = detect_remote_duplicates(
-            client, target_channel_id, scan, max_messages=history_limit, request_timeout=request_timeout
+            client, target_channel_id, scan_before if not ignore_dedupe else scan, max_messages=history_limit, request_timeout=request_timeout
         )
     except Exception as e:
         remote_dupe_report = None
@@ -366,6 +367,13 @@ def send_media_job(
                     except Exception as e:
                         _log(f"Warning: failed to delete message {m.id}: {e}")
             _log(f"Deleted {deleted} duplicate message(s) on remote (kept oldest per file).")
+            
+            # Collect only the verified duplicate filenames (normalized, from remote)
+            # These are the files we should NOT re-upload
+            remote_dupe_keys: Set[str] = set()
+            for g in remote_dupe_report.groups:
+                remote_dupe_keys.add(g.filename.lower())  # normalized remote filename
+            
             # After deletion, refresh dedupe sets and re-filter from original scan
             try:
                 if not ignore_dedupe:
@@ -382,6 +390,21 @@ def send_media_job(
                     except Exception:
                         # If scan_before not defined (ignore_dedupe True earlier), keep current scan
                         pass
+                    
+                    # Exclude only verified duplicates using variant matching
+                    # This prevents re-uploading files that were just deleted as duplicates
+                    # Note: Messages can contain multiple files (clusters); only exclude the actual dupes
+                    def _is_dupe(local_filename: str) -> bool:
+                        # Check if any variant of this local name matches a remote dupe
+                        for variant in _variants(local_filename):
+                            if variant in remote_dupe_keys:
+                                return True
+                        return False
+                    
+                    scan = ScanResult(
+                        pairs=[p for p in scan.pairs if not _is_dupe(p.mp4_path.name) and not _is_dupe(p.gif_path.name)],
+                        singles=[s for s in scan.singles if not _is_dupe(s.path.name)]
+                    )
             except Exception as e:
                 _log(f"Warning: failed to refresh dedupe after deletion: {e}")
 
