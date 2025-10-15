@@ -196,6 +196,8 @@ def send_media_job(
 
     _log("Scanning input directory for media...")
     scan = scan_media(input_dir)
+    # Save original unfiltered scan for diagnostics and remote dupe detection
+    scan_before = scan
     # Track duplicates detected for end-of-run summary
     duplicates_detected: List[str] = []
     # Track remote dupe report for JSON/prompt
@@ -254,8 +256,7 @@ def send_media_job(
         except Exception:
             pass
 
-        # Apply filter
-        scan_before = scan
+        # Apply filter (scan_before already saved above)
         # Expand existing_set to include all variants before filtering
         existing_expanded: Set[str] = set()
         for n in existing_set:
