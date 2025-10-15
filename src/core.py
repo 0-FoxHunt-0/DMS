@@ -11,7 +11,7 @@ from queue import Queue, Empty
 
 from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
-from .scanner import scan_media, detect_remote_duplicates
+from .scanner import scan_media, _variants, detect_remote_duplicates
 from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
 from .logging_utils import start_thread_log, sanitize_for_filename
 
