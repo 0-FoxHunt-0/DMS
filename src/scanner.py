@@ -93,6 +93,26 @@ def _variants(name: str) -> List[str]:
         if discord_normalized != name_l:
             variants.append(discord_normalized)
 
+        # Also try removing brackets and normalizing the tag part separately
+        # This handles cases like "Shadowheart's True Feelings [speedybuzzingorangutan]" -> "Shadowhearts_True_Feelings_speedybuzzingorangutan"
+        bracket_match = re.search(r'^(.+?)\s*\[([^\]]+)\](.*)$', base)
+        if bracket_match:
+            prefix, bracket_content, suffix = bracket_match.groups()
+            # Normalize prefix: remove apostrophes and other special chars, replace spaces with underscores
+            normalized_prefix = re.sub(r'[\'(){}\[\]!@#$%^&*+=|\\:;"<>?,`~]', '', prefix.replace(' ', '_'))
+            # The bracket content (tag) should already be normalized
+            normalized_tag = bracket_content
+            # Try both with and without underscore between prefix and tag
+            variants_to_try = [
+                normalized_prefix + '_' + normalized_tag + suffix,
+                normalized_prefix + normalized_tag + suffix,
+            ]
+            for combined in variants_to_try:
+                combined_normalized = re.sub(r'[(){}\[\]!@#$%^&*+=|\\:;"\'<>?,`~]', '', combined)
+                tag_variant = combined_normalized + ext
+                if tag_variant != name_l:
+                    variants.append(tag_variant)
+
         # Reverse: underscores -> spaces (for matching Discord files against local files with spaces)
         space_variant = base.replace('_', ' ') + ext
         if space_variant != name_l:

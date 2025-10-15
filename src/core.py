@@ -11,9 +11,8 @@ from queue import Queue, Empty
 
 from .discord_client import DiscordClient
 from .discord_client import DiscordAuthError
-from .scanner import scan_media, _variants
+from .scanner import scan_media, detect_remote_duplicates
 from .scanner import VIDEO_EXTS, GIF_EXTS, IMAGE_EXTS, ScanResult
-from .scanner import detect_remote_duplicates
 from .logging_utils import start_thread_log, sanitize_for_filename
 
 
@@ -237,6 +236,7 @@ def send_media_job(
             existing_variants = diagnostics["existing_variants"]
             hits = diagnostics["hits"]
             duplicates_detected = diagnostics["duplicates"]
+
             
             _log(f"Dedupe pre-filter: {hits} of {len(planned_names)} filename(s) match local+remote")
             if hits == 0 and dedupe_logger is not None:
