@@ -227,8 +227,9 @@ def send_media_job(
             pass
 
         # Get deduplication diagnostics from scanner
+        # Use scan_before (unfiltered) to capture ALL duplicates for upload_dupes JSON
         try:
-            diagnostics = scan.get_dedupe_diagnostics(existing_set)
+            diagnostics = scan_before.get_dedupe_diagnostics(existing_set)
             planned_names = diagnostics["planned_names"]
             planned_variants = diagnostics["planned_variants"]
             existing_variants = diagnostics["existing_variants"]
