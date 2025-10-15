@@ -288,26 +288,27 @@ def send_media_job(
         except Exception:
             pass
 
-    # If remote dupes exist, write dupes.json entry and prompt for removal
-    def _write_dupes_json(upload_dupes_list: List[str]) -> None:
+    # Consolidated dupes.json writer (single flush, upsert & de-dup per thread)
+    def _flush_dupes_json(upload_dupes_list: List[str], report) -> None:
         try:
             base_dir = run_dir or Path("logs")
             base_dir.mkdir(parents=True, exist_ok=True)
             fp = base_dir / "dupes.json"
-            existing: dict = {}
+            store: dict = {}
             if fp.exists():
                 try:
                     with fp.open("r", encoding="utf-8") as f:
-                        existing = json.load(f) or {}
+                        store = json.load(f) or {}
                 except Exception:
-                    existing = {}
-            remote_list = existing.get("remote_dupes") or []
-            upload_list = existing.get("upload_dupes") or []
-            # Prepare remote entry (if any)
-            if remote_dupe_report is not None and getattr(remote_dupe_report, "groups", None):
+                    store = {}
+            remote_list: List[dict] = list(store.get("remote_dupes") or [])
+            upload_list: List[dict] = list(store.get("upload_dupes") or [])
+
+            # Upsert remote_dupes by thread_id
+            if report is not None and getattr(report, "groups", None):
                 rem_entry = {
-                    "thread_id": remote_dupe_report.thread_id,
-                    "thread_name": remote_dupe_report.thread_name,
+                    "thread_id": report.thread_id,
+                    "thread_name": report.thread_name,
                     "groups": [
                         {
                             "filename": g.filename,
@@ -323,28 +324,41 @@ def send_media_job(
                                 for m in g.messages
                             ],
                         }
-                        for g in remote_dupe_report.groups
+                        for g in report.groups
                     ],
                 }
-                remote_list.append(rem_entry)
-            # Prepare upload entry (if any)
+                idx = next((i for i, e in enumerate(remote_list) if str(e.get("thread_id")) == str(report.thread_id)), -1)
+                if idx >= 0:
+                    remote_list[idx] = rem_entry
+                else:
+                    remote_list.append(rem_entry)
+
+            # Upsert upload_dupes by thread_id
             if upload_dupes_list:
-                upl_entry = {
-                    "thread_id": remote_dupe_report.thread_id if remote_dupe_report else target_channel_id,
-                    "thread_name": (remote_dupe_report.thread_name if remote_dupe_report else None),
-                    "duplicates": sorted(list(set(upload_dupes_list))),
-                }
-                upload_list.append(upl_entry)
-            data = {"remote_dupes": remote_list, "upload_dupes": upload_list}
+                upl_tid = (report.thread_id if report else target_channel_id)
+                upl_tname = (getattr(report, "thread_name", None) if report else None)
+                new_set = set(upload_dupes_list)
+                idx = next((i for i, e in enumerate(upload_list) if str(e.get("thread_id")) == str(upl_tid)), -1)
+                if idx >= 0:
+                    prev = set(upload_list[idx].get("duplicates") or [])
+                    upload_list[idx]["duplicates"] = sorted(list(prev | new_set))
+                    if not upload_list[idx].get("thread_name") and upl_tname:
+                        upload_list[idx]["thread_name"] = upl_tname
+                else:
+                    upload_list.append({
+                        "thread_id": upl_tid,
+                        "thread_name": upl_tname,
+                        "duplicates": sorted(list(new_set)),
+                    })
+
+            store = {"remote_dupes": remote_list, "upload_dupes": upload_list}
             with fp.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(store, f, indent=2)
         except Exception:
             pass
 
     # If we found any remote dupes, notify and optionally delete
     if remote_dupe_report is not None and remote_dupe_report.groups:
-        # Write JSON record including current upload_dupes (if computed already)
-        _write_dupes_json(duplicates_detected)
         thread_display = remote_dupe_report.thread_name or str(target_channel_id)
         _log(f"Duped files have been detected in ({thread_display})\nPlease refer to the logs for the list")
         do_delete = False
@@ -403,10 +417,25 @@ def send_media_job(
                                 return True
                         return False
                     
-                    scan = ScanResult(
-                        pairs=[p for p in scan.pairs if not _is_dupe(p.mp4_path.name) and not _is_dupe(p.gif_path.name)],
-                        singles=[s for s in scan.singles if not _is_dupe(s.path.name)]
-                    )
+                    # Rebuild scan preserving non-dupe files from pairs
+                    new_pairs: List[ScanResult.__annotations__] = []  # type: ignore
+                    new_singles: List[ScanResult.__annotations__] = []  # type: ignore
+                    # Handle pairs -> keep both, or split to singles if one is dupe
+                    for p in scan.pairs:
+                        mp4_is_dupe = _is_dupe(p.mp4_path.name)
+                        gif_is_dupe = _is_dupe(p.gif_path.name)
+                        if not mp4_is_dupe and not gif_is_dupe:
+                            new_pairs.append(p)
+                        else:
+                            if not mp4_is_dupe:
+                                new_singles.append(type(scan).singles.__args__[0](root_key=p.root_key, path=p.mp4_path))  # type: ignore
+                            if not gif_is_dupe:
+                                new_singles.append(type(scan).singles.__args__[0](root_key=p.root_key, path=p.gif_path))  # type: ignore
+                    # Handle singles
+                    for s in scan.singles:
+                        if not _is_dupe(s.path.name):
+                            new_singles.append(s)
+                    scan = ScanResult(pairs=new_pairs, singles=new_singles)
             except Exception as e:
                 _log(f"Warning: failed to refresh dedupe after deletion: {e}")
 
@@ -674,11 +703,10 @@ def send_media_job(
     except Exception:
         pass
 
-    # Persist upload duplicates into dupes.json even when no remote dupes were found
+    # Single consolidated dupes.json flush (merge/upsert per thread)
     try:
-        if not ignore_dedupe and duplicates_detected:
-            # Reuse helper defined above
-            _write_dupes_json(duplicates_detected)  # type: ignore[misc]
+        if not ignore_dedupe:
+            _flush_dupes_json(duplicates_detected, remote_dupe_report)
     except Exception:
         pass
 
